@@ -1,0 +1,105 @@
+# Copyright (c) 2026 Ambit Systems Pty Ltd.
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ambit-verify"
+version = "0.1.0"
+description = "Standalone verifier for Ambit hash-chained evidence ledgers, head attestations, witness records, and checkpoints"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Ambit Systems" }]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+keywords = ["audit", "ledger", "hash-chain", "ed25519", "verification"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Information Technology",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Security :: Cryptography",
+  "Typing :: Typed",
+]
+dependencies = [
+  # Signing and verification surface: majors are reviewed before adoption,
+  # never picked up implicitly.
+  "cryptography>=42,<50",
+]
+
+[project.urls]
+Homepage = "https://github.com/ambit-systems/ambit-verify"
+Changelog = "https://github.com/ambit-systems/ambit-verify/blob/main/CHANGELOG.md"
+
+[project.scripts]
+ambit-verify = "ambit_verify.cli:main"
+
+[project.optional-dependencies]
+dev = [
+  "mypy==1.19.1",
+  "pytest>=7.0",
+  "ruff==0.15.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E", "W", "F", "I", "N", "UP", "B", "C4", "SIM", "PTH", "RUF", "D", "ANN",
+]
+ignore = [
+  "ANN401",        # typed **kwargs pass-through; narrowing would fight the public API
+  "D105",          # magic-method docstrings add noise, not meaning
+  "D107",          # __init__ is documented on the class, not the constructor
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "ANN", "C408", "PTH", "RUF043", "RUF059"]
+"**/__init__.py" = ["D104"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/ambit_verify"]
+strict = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+disallow_any_generics = true
+no_implicit_reexport = true
+ignore_missing_imports = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ambit_verify"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/ambit_verify",
+  "tests",
+  "samples",
+  "CHANGELOG.md",
+  "LICENSE",
+  "NOTICE",
+  "README.md",
+  "pyproject.toml",
+]
