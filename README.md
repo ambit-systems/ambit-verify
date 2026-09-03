@@ -7,7 +7,7 @@ engine that wrote it. It depends on the Python standard library and
 `cryptography` only. It writes nothing and ships no signer: the Ed25519
 verifiers hold public keys only.
 
-## What it verifies
+## What the command verifies
 
 | Check | Input | What a pass proves |
 | --- | --- | --- |
@@ -23,6 +23,28 @@ verifiers hold public keys only.
 - That the ledger is complete, unless a head check runs. Without `--public-key`, `--witness`, or `--checkpoint`, a ledger with its tail removed still passes. Bare-chain verification pins only the genesis.
 - Anything about the key. The verifier trusts the public key you pass. Obtain it from the party that signs, over a channel you trust.
 - That the signer was honest at signing time. A head attestation proves the key holder saw this head. It does not prove the key holder is independent of the writer. Use a witness or a checkpoint for that.
+
+## Verify receipt links
+
+The package also exposes a semantic verifier for code that needs to check
+decision → consequence-intent → outcome relationships:
+
+```python
+from ambit_verify import verify_receipt_links
+
+report = verify_receipt_links("ledger.jsonl")
+print(report.is_valid, report.genuine_refusal_count)
+```
+
+It verifies the hash chain first. It then checks that non-dry-run ALLOW
+decisions have one intent and outcome, linked records agree on the actor,
+adapter, fingerprint, and verdict, and blocked decisions have no downstream
+consequence records.
+
+The `ambit-cli` package exposes this API as `ambit receipts verify`,
+`ambit receipts consequences`, and `ambit receipts refusals`. The standalone
+`ambit-verify` command remains the smaller chain, head, witness, and checkpoint
+verifier described below.
 
 ## Install
 
@@ -118,7 +140,12 @@ failure is reported.
 ## Library
 
 ```python
-from ambit_verify import Ed25519HeadVerifier, read_attestation_file, verify_chain
+from ambit_verify import (
+    Ed25519HeadVerifier,
+    read_attestation_file,
+    verify_chain,
+    verify_receipt_links,
+)
 
 ok, count, error = verify_chain("ledger.jsonl")
 
@@ -127,6 +154,8 @@ ok, count, error = verify_chain("ledger.jsonl", verifier=verifier)
 
 retained = read_attestation_file("ledger-2026-06-15.attest")
 ok, count, error = verify_chain("ledger.jsonl", verifier=verifier, attestation=retained)
+
+links = verify_receipt_links("ledger.jsonl")
 ```
 
 `verify_witnessed_head` and `verify_checkpoint` take the same verifier
@@ -142,7 +171,7 @@ the secret attested the head.
 1-based), `prev_hash` (64 hex characters; `0` x 64 for `seq` 1) and
 `record_hash` (SHA-256 of the canonical JSON of every other key: keys sorted,
 no whitespace, ASCII-escaped). Other keys are the writer's contract; the
-verifier does not read them.
+verifier does not read them; `verify_receipt_links` reads the decision and consequence fields after the chain passes.
 
 **Attestation** (`.attest` sidecar or a retained copy): a JSON object with
 `max_seq`, `head_record_hash`, `recorded_at`, `trust_root_id`, `signature`
