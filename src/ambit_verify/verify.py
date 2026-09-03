@@ -144,17 +144,18 @@ def _walk_chain(files: list[Path], want_seq: int = 0) -> _Chain:
 
 @dataclass(frozen=True)
 class _Checked:
-    """One record's check: its hash, or the reason it failed."""
+    """One record's check: its hash and parsed object, or the reason it failed."""
 
     record_hash: str
     error: str | None
+    record: dict[str, Any] | None
 
 
 def _check_record(text: str, count: int, prev_hash: str, where: str) -> _Checked:
     """Check one record line against the chain state."""
 
     def fail(reason: str) -> _Checked:
-        return _Checked("", f"{where}: {reason}")
+        return _Checked("", f"{where}: {reason}", None)
 
     try:
         record = json.loads(text)
@@ -173,7 +174,7 @@ def _check_record(text: str, count: int, prev_hash: str, where: str) -> _Checked
     unsigned = {key: value for key, value in record.items() if key != "record_hash"}
     if hash_object(unsigned) != record_hash:
         return fail("record_hash mismatch")
-    return _Checked(record_hash, None)
+    return _Checked(record_hash, None, record)
 
 
 def _walk_ledger(ledger_path: Path, want_seq: int = 0) -> _Chain:
@@ -341,6 +342,48 @@ def verify_chain(
         if not head_ok:
             return False, chain.count, head_error
     return True, chain.count, None
+
+
+def read_verified_records(
+    path: str | Path,
+) -> tuple[bool, tuple[dict[str, Any], ...], str | None]:
+    """Read all records only after validating their complete hash chain.
+
+    The returned records come from the same parse used for hash validation,
+    avoiding a second read in which the ledger could change between integrity
+    checking and semantic inspection.
+
+    Args:
+        path: The active ledger file. Rotated segments beside it are read first.
+
+    Returns:
+        ``(ok, records, error)``. Callers must not interpret ``records`` unless
+        ``ok`` is true.
+
+    Raises:
+        OSError: If a ledger file cannot be read.
+    """
+    ledger_path = Path(path).expanduser().resolve()
+    if not ledger_path.exists():
+        return False, (), "ledger file does not exist"
+    if not ledger_path.is_file():
+        return False, (), "ledger path is not a file"
+
+    records: list[dict[str, Any]] = []
+    prev_hash = GENESIS_HASH
+    try:
+        for file_path, line_no, text in _lines(ledger_files(ledger_path)):
+            where = f"{file_path.name}:{line_no}"
+            checked = _check_record(text, len(records), prev_hash, where)
+            if checked.error is not None:
+                return False, (), checked.error
+            if checked.record is None:  # Defensive: a valid check always carries its record.
+                return False, (), f"{where}: verified record unavailable"
+            records.append(checked.record)
+            prev_hash = checked.record_hash
+    except _NotUtf8Error as exc:
+        return False, (), f"{exc.path.name}: file is not UTF-8"
+    return True, tuple(records), None
 
 
 def read_head(path: str | Path) -> tuple[int, str]:

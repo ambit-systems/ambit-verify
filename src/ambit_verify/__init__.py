@@ -37,6 +37,14 @@ from .head_attestation import (
     checkpoint_payload,
 )
 from .head_attestation_ed25519 import Ed25519CountersignVerifier, Ed25519HeadVerifier
+from .receipt_links import (
+    ReceiptConsequence,
+    ReceiptLinkIssue,
+    ReceiptLinkReport,
+    ReceiptRefusal,
+    verify_receipt_links,
+    verify_receipt_records,
+)
 from .verify import (
     GENESIS_HASH,
     LedgerReadError,
@@ -44,6 +52,7 @@ from .verify import (
     read_attestation,
     read_attestation_file,
     read_head,
+    read_verified_records,
     verify_chain,
     verify_checkpoint,
     verify_witnessed_head,
@@ -60,6 +69,10 @@ __all__ = [
     "HeadVerifier",
     "HmacHeadVerifier",
     "LedgerReadError",
+    "ReceiptConsequence",
+    "ReceiptLinkIssue",
+    "ReceiptLinkReport",
+    "ReceiptRefusal",
     "__version__",
     "attestation_block",
     "attestation_payload",
@@ -70,7 +83,10 @@ __all__ = [
     "read_attestation",
     "read_attestation_file",
     "read_head",
+    "read_verified_records",
     "verify_chain",
     "verify_checkpoint",
+    "verify_receipt_links",
+    "verify_receipt_records",
     "verify_witnessed_head",
 ]
