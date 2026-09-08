@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+import ambit_verify.cli as cli_module
 from ambit_verify import attestation_block, checkpoint_payload, hash_object, read_head
 from ambit_verify.cli import main
 from ledger_fixtures import (
@@ -58,18 +59,20 @@ def test_bare_chain_fail(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> 
     assert _run(capsys, path) == (1, "FAIL: ledger.jsonl:3: record_hash mismatch\n", "")
 
 
-def test_missing_ledger_is_a_usage_error(
+def test_missing_ledger_is_a_controlled_failure(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    err = _usage_error(capsys, tmp_path / "absent.jsonl")
-    assert "argument ledger: file does not exist" in err
+    assert _run(capsys, tmp_path / "absent.jsonl") == (
+        1,
+        "FAIL: ledger file does not exist\n",
+        "",
+    )
 
 
-def test_directory_ledger_is_a_usage_error(
+def test_directory_ledger_is_a_controlled_failure(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    err = _usage_error(capsys, tmp_path)
-    assert "argument ledger: file does not exist" in err
+    assert _run(capsys, tmp_path) == (1, "FAIL: ledger path is not a file\n", "")
 
 
 def test_head_attestation_from_sidecar(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -200,15 +203,19 @@ def test_usage_errors_exit_2_before_any_verification(
     assert message in err
 
 
-def test_named_attestation_file_must_exist(
+def test_named_attestation_file_is_admitted_by_the_verifier(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _, public_key = generate_keypair()
     path = filled(tmp_path / "ledger.jsonl", 1)
-    err = _usage_error(
-        capsys, path, "--attestation", tmp_path / "absent.json", "--public-key", public_key.hex()
-    )
-    assert "argument --attestation: file does not exist" in err
+    assert _run(
+        capsys,
+        path,
+        "--attestation",
+        tmp_path / "absent.json",
+        "--public-key",
+        public_key.hex(),
+    ) == (1, "FAIL: head attestation malformed\n", "")
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file modes")
@@ -280,6 +287,50 @@ def _checkpoint(planes: _Planes, tmp_path: Path, authority_path: Path) -> Path:
     path = tmp_path / "checkpoint.json"
     path.write_text(json.dumps(checkpoint), encoding="utf-8")
     return path
+
+
+def test_combined_checks_share_one_ledger_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    planes = _Planes()
+    authority_path = filled(tmp_path / "authority.jsonl", 1)
+    authority_at_one = authority_path.read_bytes()
+    witness_path = tmp_path / "witness.jsonl"
+    _witness(planes, witness_path, authority_path)
+    witness_at_one = witness_path.read_bytes()
+    witness_attestation_at_one = witness_path.with_suffix(".attest").read_bytes()
+    append(authority_path, score(2))
+    _witness(planes, witness_path, authority_path)
+
+    original_walk = cli_module._walk_ledger
+    swapped = False
+
+    def swapping_walk(path: Path, want_seq: int = 0) -> Any:
+        nonlocal swapped
+        chain = original_walk(path, want_seq)
+        if not swapped and path == authority_path.resolve():
+            swapped = True
+            authority_path.write_bytes(authority_at_one)
+            witness_path.write_bytes(witness_at_one)
+            witness_path.with_suffix(".attest").write_bytes(witness_attestation_at_one)
+        return chain
+
+    monkeypatch.setattr(cli_module, "_walk_ledger", swapping_walk)
+    code, out, err = _run(
+        capsys,
+        authority_path,
+        "--witness",
+        witness_path,
+        "--witnessed-ledger-id",
+        LEDGER_ID,
+        "--witness-public-key",
+        planes.witness_public.hex(),
+    )
+    assert code == 1
+    assert out.startswith("FAIL: witness: stale witness:")
+    assert err == ""
 
 
 def test_witness_pass_and_rollback(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

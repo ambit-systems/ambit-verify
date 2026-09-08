@@ -16,13 +16,23 @@ reads the full chain; no head file is trusted.
 
 from __future__ import annotations
 
-import json
-from collections.abc import Iterator, Mapping
+import errno
+import math
+import os
+import stat
+import unicodedata
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeGuard
+from typing import Any, BinaryIO, TypeGuard
 
-from .hashing import hash_object
+from .hashing import (
+    MAX_JSON_NESTING,
+    canonical_json_bytes,
+    hash_object,
+    strict_json_loads,
+)
 from .head_attestation import (
     ATTESTATION_BLOCK_KEYS,
     CheckpointVerifier,
@@ -40,6 +50,23 @@ _CHECKPOINT_KEYS = frozenset(
     {"seq", "record_hash", "attestation", "witness_record", "countersignature"}
 )
 _HEX_DIGITS = frozenset("0123456789abcdef")
+MAX_JSON_DOCUMENT_BYTES = 1024 * 1024
+MAX_LEDGER_LINE_BYTES = 16 * 1024 * 1024
+MAX_LEDGER_BYTES = 1024 * 1024 * 1024
+MAX_LEDGER_PHYSICAL_LINES = 2_000_000
+MAX_LEDGER_DIRECTORY_ENTRIES = 100_000
+MAX_LEDGER_SEGMENTS = 10_000
+MAX_LEDGER_RECORDS = 1_000_000
+_ATTESTATION_REQUIRED_KEYS = frozenset(
+    {"max_seq", "head_record_hash", "recorded_at", "trust_root_id", "signature"}
+)
+_DESCRIPTOR_ADMISSION_SUPPORTED = (
+    hasattr(os, "O_NOFOLLOW")
+    and hasattr(os, "O_DIRECTORY")
+    and os.open in os.supports_dir_fd
+    and os.scandir in os.supports_fd
+)
+_ATTESTATION_KEYS = _ATTESTATION_REQUIRED_KEYS | {"ledger_id"}
 
 
 class LedgerReadError(RuntimeError):
@@ -67,33 +94,48 @@ class _Chain:
     hash_at: str | None
 
 
-def ledger_files(ledger_path: str | Path) -> list[Path]:
-    """Return the files that make up one ledger, in chain order.
-
-    A writer rotates a ledger into segments named ``<stem>.<n><suffix>`` beside
-    the active file. The chain runs through the segments in ascending ``n``
-    and ends in the active file.
-
-    Args:
-        ledger_path: The active ledger file.
-
-    Returns:
-        The segment paths in ascending ``n``, then *ledger_path*.
-    """
-    ledger_path = Path(ledger_path)
+def _segment_paths(ledger_path: Path, names: Iterator[str]) -> list[Path]:
+    """Select rotation segments using the writer's ASCII-decimal grammar."""
     stem = ledger_path.stem
     suffix = ledger_path.suffix
     segments: list[tuple[int, Path]] = []
-    for candidate in ledger_path.parent.iterdir():
-        if candidate == ledger_path:
+    entries_examined = 0
+    for name in names:
+        entries_examined += 1
+        if entries_examined > MAX_LEDGER_DIRECTORY_ENTRIES:
+            raise _InputLimitError(
+                ledger_path,
+                None,
+                f"ledger directory exceeds {MAX_LEDGER_DIRECTORY_ENTRIES} entry limit",
+            )
+        if name == ledger_path.name:
             continue
-        name = candidate.name
         if not name.startswith(stem + ".") or not name.endswith(suffix):
             continue
-        middle = name[len(stem) + 1 : len(name) - len(suffix)]
-        if middle.isdigit():
-            segments.append((int(middle), candidate))
+        middle = name[len(stem) + 1 : -len(suffix)] if suffix else name[len(stem) + 1 :]
+        if not middle or any(character < "0" or character > "9" for character in middle):
+            continue
+        if len(segments) >= MAX_LEDGER_SEGMENTS:
+            raise _InputLimitError(
+                ledger_path,
+                None,
+                f"ledger exceeds {MAX_LEDGER_SEGMENTS} segment limit",
+            )
+        segments.append((int(middle), ledger_path.parent / name))
     return [path for _, path in sorted(segments)] + [ledger_path]
+
+
+def _descriptor_segment_paths(ledger_path: Path, directory_fd: int) -> list[Path]:
+    """Discover ledger segments by streaming one admitted directory descriptor."""
+    with os.scandir(directory_fd) as entries:
+        return _segment_paths(ledger_path, (entry.name for entry in entries))
+
+
+def ledger_files(ledger_path: str | Path) -> list[Path]:
+    """Return ASCII-numbered rotation segments, then the active ledger."""
+    path = Path(ledger_path).expanduser()
+    with _open_directory(path.parent, path) as directory_fd:
+        return _descriptor_segment_paths(path, directory_fd)
 
 
 class _NotUtf8Error(Exception):
@@ -104,41 +146,211 @@ class _NotUtf8Error(Exception):
         self.path = path
 
 
-def _lines(files: list[Path]) -> Iterator[tuple[Path, int, str]]:
-    """Yield ``(file, line_no, text)`` for every non-blank line in *files*.
+class _InputLimitError(Exception):
+    """An input exceeded a verifier resource boundary."""
 
-    Raises:
-        _NotUtf8Error: If a file is not UTF-8.
-    """
+    def __init__(self, path: Path, line_no: int | None, reason: str) -> None:
+        super().__init__(reason)
+        self.path = path
+        self.line_no = line_no
+        self.reason = reason
+
+
+def _terminal_safe(value: object) -> str:
+    """Escape terminal controls, format characters, and surrogate code points."""
+    text = str(value)
+    return "".join(
+        character
+        if not unicodedata.category(character).startswith("C")
+        else character.encode("unicode_escape").decode("ascii")
+        for character in text
+    )
+
+
+def _require_descriptor_admission() -> None:
+    if not _DESCRIPTOR_ADMISSION_SUPPORTED:
+        raise OSError(
+            errno.ENOTSUP,
+            "secure no-follow filesystem admission is unavailable",
+        )
+
+
+@contextmanager
+def _open_directory(path: Path, error_path: Path) -> Iterator[int]:
+    """Open a lexical directory path without following any symlink component."""
+    _require_descriptor_admission()
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(os.sep if path.is_absolute() else ".", flags)
+    try:
+        for component in path.parts:
+            if component in ("", ".", os.sep):
+                continue
+            try:
+                next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                    raise _InputLimitError(
+                        error_path,
+                        None,
+                        "ledger directory contains a symbolic link or is not a directory",
+                    ) from None
+                raise
+            os.close(descriptor)
+            descriptor = next_descriptor
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
+@contextmanager
+def _open_regular_file(
+    path: Path,
+    *,
+    directory_fd: int | None = None,
+    not_regular_reason: str = "ledger component is not a regular file",
+) -> Iterator[BinaryIO]:
+    """Open *path* once without following links or blocking on special files."""
+    _require_descriptor_admission()
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    target: str | Path = path.name if directory_fd is not None else path
+    try:
+        descriptor = os.open(target, flags, dir_fd=directory_fd)
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+            raise _InputLimitError(path, None, "ledger component is not a regular file") from None
+        raise
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise _InputLimitError(path, None, not_regular_reason)
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            yield handle
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _read_utf8_document(path: Path) -> str:
+    lexical_path = path.expanduser()
+    with (
+        _open_directory(lexical_path.parent, lexical_path) as directory_fd,
+        _open_regular_file(lexical_path, directory_fd=directory_fd) as handle,
+    ):
+        raw = handle.read(MAX_JSON_DOCUMENT_BYTES + 1)
+    if len(raw) > MAX_JSON_DOCUMENT_BYTES:
+        raise _InputLimitError(
+            lexical_path, None, f"file exceeds {MAX_JSON_DOCUMENT_BYTES} byte limit"
+        )
+    return raw.decode("utf-8")
+
+
+def _lines(
+    files: list[Path],
+    *,
+    directory_fd: int | None = None,
+    active_path: Path | None = None,
+    active_handle: BinaryIO | None = None,
+) -> Iterator[tuple[Path, int, str]]:
+    """Yield bounded UTF-8 lines, opening each ledger component exactly once."""
+    total_bytes = 0
+    physical_lines = 0
     for file_path in files:
         try:
-            with file_path.open("r", encoding="utf-8") as handle:
-                for line_no, line in enumerate(handle, start=1):
-                    text = line.strip()
-                    if text:
-                        yield file_path, line_no, text
+            handle_context = (
+                nullcontext(active_handle)
+                if active_handle is not None and file_path == active_path
+                else _open_regular_file(file_path, directory_fd=directory_fd)
+            )
+            with handle_context as handle:
+                line_no = 0
+                while raw := handle.readline(MAX_LEDGER_LINE_BYTES + 1):
+                    line_no += 1
+                    physical_lines += 1
+                    total_bytes += len(raw)
+                    if len(raw) > MAX_LEDGER_LINE_BYTES:
+                        raise _InputLimitError(
+                            file_path,
+                            line_no,
+                            f"line exceeds {MAX_LEDGER_LINE_BYTES} byte limit",
+                        )
+                    if total_bytes > MAX_LEDGER_BYTES:
+                        raise _InputLimitError(
+                            file_path,
+                            line_no,
+                            f"ledger input exceeds {MAX_LEDGER_BYTES} byte limit",
+                        )
+                    if physical_lines > MAX_LEDGER_PHYSICAL_LINES:
+                        raise _InputLimitError(
+                            file_path,
+                            line_no,
+                            f"ledger exceeds {MAX_LEDGER_PHYSICAL_LINES} physical line limit",
+                        )
+                    stripped = raw.strip()
+                    if stripped:
+                        yield file_path, line_no, stripped.decode("utf-8")
         except UnicodeDecodeError:
             raise _NotUtf8Error(file_path) from None
 
 
-def _walk_chain(files: list[Path], want_seq: int = 0) -> _Chain:
+def _walk_chain(
+    files: list[Path],
+    want_seq: int = 0,
+    record_visitor: Callable[[dict[str, Any]], None] | None = None,
+    *,
+    directory_fd: int | None = None,
+    active_path: Path | None = None,
+    active_handle: BinaryIO | None = None,
+) -> _Chain:
     """Verify every record in *files* in order and collect the head."""
     count = 0
     prev_hash = GENESIS_HASH
     hash_at: str | None = None
 
     try:
-        for file_path, line_no, text in _lines(files):
-            where = f"{file_path.name}:{line_no}"
+        for file_path, line_no, text in _lines(
+            files,
+            directory_fd=directory_fd,
+            active_path=active_path,
+            active_handle=active_handle,
+        ):
+            where = f"{_terminal_safe(file_path.name)}:{line_no}"
+            if count >= MAX_LEDGER_RECORDS:
+                return _Chain(
+                    False,
+                    count,
+                    f"{where}: ledger exceeds {MAX_LEDGER_RECORDS} record limit",
+                    prev_hash,
+                    hash_at,
+                )
             result = _check_record(text, count, prev_hash, where)
             if result.error is not None:
                 return _Chain(False, count, result.error, prev_hash, hash_at)
+            if result.record is None:
+                return _Chain(
+                    False,
+                    count,
+                    f"{where}: verified record unavailable",
+                    prev_hash,
+                    hash_at,
+                )
+            if record_visitor is not None:
+                record_visitor(result.record)
             prev_hash = result.record_hash
             count += 1
             if count == want_seq:
                 hash_at = result.record_hash
     except _NotUtf8Error as exc:
-        return _Chain(False, count, f"{exc.path.name}: file is not UTF-8", prev_hash, hash_at)
+        return _Chain(
+            False,
+            count,
+            f"{_terminal_safe(exc.path.name)}: file is not UTF-8",
+            prev_hash,
+            hash_at,
+        )
+    except _InputLimitError as exc:
+        name = _terminal_safe(exc.path.name)
+        where = name if exc.line_no is None else f"{name}:{exc.line_no}"
+        return _Chain(False, count, f"{where}: {exc.reason}", prev_hash, hash_at)
     return _Chain(True, count, None, prev_hash, hash_at)
 
 
@@ -158,18 +370,18 @@ def _check_record(text: str, count: int, prev_hash: str, where: str) -> _Checked
         return _Checked("", f"{where}: {reason}", None)
 
     try:
-        record = json.loads(text)
-    except json.JSONDecodeError as exc:
-        return fail(f"invalid JSON ({exc})")
+        record = strict_json_loads(text)
+    except (ValueError, RecursionError) as exc:
+        return fail(f"invalid JSON ({_terminal_safe(exc)})")
     if not isinstance(record, dict):
         return fail("record is not an object")
     seq = record.get("seq")
     if not isinstance(seq, int) or isinstance(seq, bool) or seq != count + 1:
-        return fail(f"unexpected seq {seq}, expected {count + 1}")
+        return fail(f"unexpected seq {_terminal_safe(seq)}, expected {count + 1}")
     if record.get("prev_hash") != prev_hash:
         return fail("prev_hash mismatch")
     record_hash = record.get("record_hash")
-    if not isinstance(record_hash, str) or len(record_hash) != 64:
+    if not _is_digest(record_hash):
         return fail("missing/invalid record_hash")
     unsigned = {key: value for key, value in record.items() if key != "record_hash"}
     if hash_object(unsigned) != record_hash:
@@ -177,18 +389,111 @@ def _check_record(text: str, count: int, prev_hash: str, where: str) -> _Checked
     return _Checked(record_hash, None, record)
 
 
-def _walk_ledger(ledger_path: Path, want_seq: int = 0) -> _Chain:
-    """Verify the chain at *ledger_path* (segments first), or explain why not."""
-    if not ledger_path.exists():
+def _walk_ledger(
+    ledger_path: Path,
+    want_seq: int = 0,
+    record_visitor: Callable[[dict[str, Any]], None] | None = None,
+) -> _Chain:
+    """Verify one lexical ledger path through one directory descriptor."""
+    lexical_path = ledger_path.expanduser()
+    try:
+        with (
+            _open_directory(lexical_path.parent, lexical_path) as directory_fd,
+            _open_regular_file(
+                lexical_path,
+                directory_fd=directory_fd,
+                not_regular_reason="ledger path is not a file",
+            ) as active_handle,
+        ):
+            files = _descriptor_segment_paths(lexical_path, directory_fd)
+            return _walk_chain(
+                files,
+                want_seq,
+                record_visitor,
+                directory_fd=directory_fd,
+                active_path=lexical_path,
+                active_handle=active_handle,
+            )
+    except FileNotFoundError:
         return _Chain(False, 0, "ledger file does not exist", GENESIS_HASH, None)
-    if not ledger_path.is_file():
-        return _Chain(False, 0, "ledger path is not a file", GENESIS_HASH, None)
-    return _walk_chain(ledger_files(ledger_path), want_seq)
+    except _InputLimitError as exc:
+        if exc.reason == "ledger path is not a file":
+            error = exc.reason
+        else:
+            error = f"{_terminal_safe(exc.path.name)}: {exc.reason}"
+        return _Chain(False, 0, error, GENESIS_HASH, None)
 
 
 def _attest_path(ledger_path: Path) -> Path:
     """Return the path of the ``.attest`` sidecar beside *ledger_path*."""
     return ledger_path.with_suffix(".attest")
+
+
+def _attestation_is_well_formed(attestation: HeadAttestation, *, require_ledger_id: bool) -> bool:
+    return (
+        isinstance(attestation.max_seq, int)
+        and not isinstance(attestation.max_seq, bool)
+        and attestation.max_seq >= 0
+        and _is_digest(attestation.head_record_hash)
+        and isinstance(attestation.recorded_at, str)
+        and bool(attestation.recorded_at)
+        and isinstance(attestation.trust_root_id, str)
+        and bool(attestation.trust_root_id)
+        and isinstance(attestation.signature, str)
+        and bool(attestation.signature)
+        and (
+            (isinstance(attestation.ledger_id, str) and bool(attestation.ledger_id))
+            if require_ledger_id
+            else (
+                attestation.ledger_id is None
+                or (isinstance(attestation.ledger_id, str) and bool(attestation.ledger_id))
+            )
+        )
+    )
+
+
+def _attestation_from_mapping(
+    data: Mapping[str, Any], *, require_ledger_id: bool
+) -> HeadAttestation | None:
+    keys = set(data)
+    expected = ATTESTATION_BLOCK_KEYS if require_ledger_id else _ATTESTATION_KEYS
+    required = ATTESTATION_BLOCK_KEYS if require_ledger_id else _ATTESTATION_REQUIRED_KEYS
+    if keys - expected or not required <= keys:
+        return None
+    max_seq: object = data.get("max_seq")
+    head_record_hash: object = data.get("head_record_hash")
+    recorded_at: object = data.get("recorded_at")
+    trust_root_id: object = data.get("trust_root_id")
+    signature: object = data.get("signature")
+    ledger_id: object = data.get("ledger_id")
+    if (
+        not isinstance(max_seq, int)
+        or isinstance(max_seq, bool)
+        or max_seq < 0
+        or not _is_digest(head_record_hash)
+        or not isinstance(recorded_at, str)
+        or not recorded_at
+        or not isinstance(trust_root_id, str)
+        or not trust_root_id
+        or not isinstance(signature, str)
+        or not signature
+    ):
+        return None
+    parsed_ledger_id: str | None
+    if isinstance(ledger_id, str) and ledger_id:
+        parsed_ledger_id = ledger_id
+    elif ledger_id is None and not require_ledger_id:
+        parsed_ledger_id = None
+    else:
+        return None
+    return HeadAttestation(
+        max_seq=max_seq,
+        head_record_hash=head_record_hash,
+        recorded_at=recorded_at,
+        trust_root_id=trust_root_id,
+        signature=signature,
+        ledger_id=parsed_ledger_id,
+    )
 
 
 def read_attestation_file(path: str | Path) -> HeadAttestation | None:
@@ -207,44 +512,20 @@ def read_attestation_file(path: str | Path) -> HeadAttestation | None:
     Raises:
         OSError: If the file exists but cannot be read.
     """
+    resolved = Path(path).expanduser()
     try:
-        text = Path(path).expanduser().read_text(encoding="utf-8")
+        text = _read_utf8_document(resolved)
     except FileNotFoundError:
         return None
-    except UnicodeDecodeError:
+    except (UnicodeDecodeError, _InputLimitError):
         return None
     try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
+        data = strict_json_loads(text)
+    except (ValueError, RecursionError):
         return None
-    if not isinstance(data, dict):
+    if not isinstance(data, Mapping):
         return None
-    max_seq = data.get("max_seq")
-    head_record_hash = data.get("head_record_hash")
-    recorded_at = data.get("recorded_at")
-    trust_root_id = data.get("trust_root_id")
-    signature = data.get("signature")
-    ledger_id = data.get("ledger_id")
-    if (
-        not isinstance(max_seq, int)
-        or isinstance(max_seq, bool)
-        or not isinstance(head_record_hash, str)
-        or not isinstance(recorded_at, str)
-        or not isinstance(trust_root_id, str)
-        or not trust_root_id
-        or not isinstance(signature, str)
-    ):
-        return None
-    if ledger_id is not None and (not isinstance(ledger_id, str) or not ledger_id):
-        return None
-    return HeadAttestation(
-        max_seq=max_seq,
-        head_record_hash=head_record_hash,
-        recorded_at=recorded_at,
-        trust_root_id=trust_root_id,
-        signature=signature,
-        ledger_id=ledger_id,
-    )
+    return _attestation_from_mapping(data, require_ledger_id=False)
 
 
 def read_attestation(ledger_path: str | Path) -> HeadAttestation | None:
@@ -260,7 +541,7 @@ def read_attestation(ledger_path: str | Path) -> HeadAttestation | None:
     Raises:
         OSError: If the sidecar exists but cannot be read.
     """
-    return read_attestation_file(_attest_path(Path(ledger_path).expanduser().resolve()))
+    return read_attestation_file(_attest_path(Path(ledger_path).expanduser()))
 
 
 def _verify_head_attestation(
@@ -274,6 +555,8 @@ def _verify_head_attestation(
         attestation = read_attestation_file(attest_path)
     if attestation is None:
         return False, "head attestation missing"
+    if not _attestation_is_well_formed(attestation, require_ledger_id=False):
+        return False, "head attestation malformed"
     if not verifier.verify_head(attestation):
         return False, "head attestation invalid (signature or trust root)"
     if chain.count < attestation.max_seq:
@@ -304,6 +587,7 @@ def verify_chain(
     *,
     verifier: HeadVerifier | None = None,
     attestation: HeadAttestation | None = None,
+    _chain: _Chain | None = None,
 ) -> tuple[bool, int, str | None]:
     """Verify the hash chain, and with *verifier* the head attestation too.
 
@@ -329,10 +613,10 @@ def verify_chain(
     Raises:
         OSError: If a ledger file or the sidecar cannot be read.
     """
-    ledger_path = Path(path).expanduser().resolve()
+    ledger_path = Path(path).expanduser()
     if attestation is not None and verifier is None:
         return False, 0, "head verifier required when attestation is supplied"
-    chain = _walk_ledger(ledger_path)
+    chain = _chain if _chain is not None else _walk_ledger(ledger_path)
     if not chain.ok:
         return False, chain.count, chain.error
     if verifier is not None:
@@ -363,26 +647,11 @@ def read_verified_records(
     Raises:
         OSError: If a ledger file cannot be read.
     """
-    ledger_path = Path(path).expanduser().resolve()
-    if not ledger_path.exists():
-        return False, (), "ledger file does not exist"
-    if not ledger_path.is_file():
-        return False, (), "ledger path is not a file"
-
+    ledger_path = Path(path).expanduser()
     records: list[dict[str, Any]] = []
-    prev_hash = GENESIS_HASH
-    try:
-        for file_path, line_no, text in _lines(ledger_files(ledger_path)):
-            where = f"{file_path.name}:{line_no}"
-            checked = _check_record(text, len(records), prev_hash, where)
-            if checked.error is not None:
-                return False, (), checked.error
-            if checked.record is None:  # Defensive: a valid check always carries its record.
-                return False, (), f"{where}: verified record unavailable"
-            records.append(checked.record)
-            prev_hash = checked.record_hash
-    except _NotUtf8Error as exc:
-        return False, (), f"{exc.path.name}: file is not UTF-8"
+    chain = _walk_ledger(ledger_path, record_visitor=records.append)
+    if not chain.ok:
+        return False, (), chain.error
     return True, tuple(records), None
 
 
@@ -399,7 +668,7 @@ def read_head(path: str | Path) -> tuple[int, str]:
         LedgerReadError: If the chain is invalid or the ledger is empty.
         OSError: If a ledger file cannot be read.
     """
-    chain = _walk_ledger(Path(path).expanduser().resolve())
+    chain = _walk_ledger(Path(path).expanduser())
     if not chain.ok:
         raise LedgerReadError(f"cannot read head of invalid ledger: {chain.error}")
     if chain.count == 0:
@@ -408,61 +677,45 @@ def read_head(path: str | Path) -> tuple[int, str]:
 
 
 def _attestation_from_block(block: Mapping[str, Any]) -> HeadAttestation | None:
-    """Rebuild a ``HeadAttestation`` from a six-key attestation block."""
-    max_seq = block.get("max_seq")
-    head_record_hash = block.get("head_record_hash")
-    ledger_id = block.get("ledger_id")
-    recorded_at = block.get("recorded_at")
-    trust_root_id = block.get("trust_root_id")
-    signature = block.get("signature")
-    if (
-        not isinstance(max_seq, int)
-        or isinstance(max_seq, bool)
-        or not isinstance(head_record_hash, str)
-        or not isinstance(ledger_id, str)
-        or not ledger_id
-        or not isinstance(recorded_at, str)
-        or not isinstance(trust_root_id, str)
-        or not isinstance(signature, str)
-    ):
-        return None
-    return HeadAttestation(
-        max_seq=max_seq,
-        head_record_hash=head_record_hash,
-        recorded_at=recorded_at,
-        trust_root_id=trust_root_id,
-        signature=signature,
-        ledger_id=ledger_id,
-    )
+    """Rebuild a ``HeadAttestation`` from an exact six-key attestation block."""
+    return _attestation_from_mapping(block, require_ledger_id=True)
 
 
-def _latest_valid_witness(
-    witness_ledger_path: Path, verifier: HeadVerifier, witnessed_ledger_id: str
-) -> HeadAttestation | None:
-    """Return the highest-seq witness attestation whose signature verifies."""
+def _walk_witness_ledger(
+    witness_path: Path,
+    verifier: HeadVerifier,
+    witnessed_ledger_id: str,
+) -> tuple[_Chain, HeadAttestation | None, int | None]:
     best: HeadAttestation | None = None
-    for _, _, text in _lines(ledger_files(witness_ledger_path)):
-        try:
-            record = json.loads(text)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(record, dict) or record.get("record_type") != "head_witness":
-            continue
+    equivocation_seq: int | None = None
+
+    def inspect(record: dict[str, Any]) -> None:
+        nonlocal best, equivocation_seq
+        if record.get("record_type") != "head_witness":
+            return
         if record.get("witnessed_ledger_id") != witnessed_ledger_id:
-            continue
+            return
         block = record.get("attestation")
-        if not isinstance(block, dict):
-            continue
+        if not isinstance(block, Mapping):
+            return
         attestation = _attestation_from_block(block)
         if (
             attestation is None
             or attestation.ledger_id != witnessed_ledger_id
             or not verifier.verify_head(attestation)
         ):
-            continue
+            return
         if best is None or attestation.max_seq > best.max_seq:
             best = attestation
-    return best
+            equivocation_seq = None
+        elif (
+            attestation.max_seq == best.max_seq
+            and attestation.head_record_hash != best.head_record_hash
+        ):
+            equivocation_seq = attestation.max_seq
+
+    chain = _walk_ledger(witness_path, record_visitor=inspect)
+    return chain, best, equivocation_seq
 
 
 def verify_witnessed_head(
@@ -472,6 +725,7 @@ def verify_witnessed_head(
     *,
     witnessed_ledger_id: str,
     witness_ledger_attestation: HeadAttestation | None = None,
+    _chain: _Chain | None = None,
 ) -> tuple[bool, str | None]:
     """Check a ledger against the head an independent witness recorded.
 
@@ -501,25 +755,31 @@ def verify_witnessed_head(
     Raises:
         OSError: If a ledger file or a sidecar cannot be read.
     """
-    resolved_ledger = Path(ledger_path).expanduser().resolve()
-    witness_path = Path(witness_ledger_path).expanduser().resolve()
+    resolved_ledger = Path(ledger_path).expanduser()
+    witness_path = Path(witness_ledger_path).expanduser()
 
-    if not witnessed_ledger_id:
+    if not isinstance(witnessed_ledger_id, str) or not witnessed_ledger_id:
         return False, "witnessed_ledger_id must be non-empty"
 
-    witness_ok, _, witness_error = verify_chain(
-        witness_path,
-        verifier=verifier,
-        attestation=witness_ledger_attestation,
+    witness_chain, witnessed, equivocation_seq = _walk_witness_ledger(
+        witness_path, verifier, witnessed_ledger_id
     )
-    if not witness_ok:
-        return False, f"witness ledger invalid: {witness_error}"
-
-    witnessed = _latest_valid_witness(witness_path, verifier, witnessed_ledger_id)
+    if not witness_chain.ok:
+        return False, f"witness ledger invalid: {witness_chain.error}"
+    head_ok, head_error = _verify_head_attestation(
+        _attest_path(witness_path),
+        witness_chain,
+        verifier,
+        witness_ledger_attestation,
+    )
+    if not head_ok:
+        return False, f"witness ledger invalid: {head_error}"
+    if equivocation_seq is not None:
+        return False, f"witness equivocation at seq {equivocation_seq}"
     if witnessed is None:
         return False, f"no valid head witness found for {witnessed_ledger_id}"
 
-    chain = _walk_ledger(resolved_ledger)
+    chain = _chain if _chain is not None else _walk_ledger(resolved_ledger)
     if not chain.ok:
         return False, f"witnessed ledger invalid: {chain.error}"
     if chain.count < witnessed.max_seq:
@@ -545,6 +805,112 @@ def verify_witnessed_head(
 def _is_digest(value: object) -> TypeGuard[str]:
     """Return True when *value* is 64 lower-case hexadecimal characters."""
     return isinstance(value, str) and len(value) == 64 and set(value) <= _HEX_DIGITS
+
+
+def _is_non_empty_string(value: object) -> TypeGuard[str]:
+    """Return True when *value* is a non-empty string."""
+    return isinstance(value, str) and bool(value)
+
+
+def _checkpoint_string_cost(value: str, maximum: int) -> int:
+    """Return a bounded-input cost while rejecting unpaired surrogates."""
+    cost = 2
+    index = 0
+    while index < len(value):
+        codepoint = ord(value[index])
+        if 0xD800 <= codepoint <= 0xDBFF:
+            if index + 1 >= len(value) or not (0xDC00 <= ord(value[index + 1]) <= 0xDFFF):
+                raise ValueError("checkpoint contains an unpaired surrogate")
+            cost += 4
+            index += 2
+        elif 0xDC00 <= codepoint <= 0xDFFF:
+            raise ValueError("checkpoint contains an unpaired surrogate")
+        else:
+            cost += len(value[index].encode("utf-8"))
+            index += 1
+        if cost > maximum:
+            raise ValueError(f"checkpoint exceeds {MAX_JSON_DOCUMENT_BYTES} byte/value limit")
+    return cost
+
+
+def _project_checkpoint_value(
+    value: object,
+    *,
+    depth: int,
+    active: set[int],
+    remaining: list[int],
+) -> Any:
+    """Copy one bounded value into the strict JSON-native checkpoint domain."""
+
+    def consume(cost: int) -> None:
+        remaining[0] -= cost
+        if remaining[0] < 0:
+            raise ValueError(f"checkpoint exceeds {MAX_JSON_DOCUMENT_BYTES} byte/value limit")
+
+    consume(1)
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        if value.bit_length() > remaining[0] * 4:
+            raise ValueError(f"checkpoint exceeds {MAX_JSON_DOCUMENT_BYTES} byte/value limit")
+        consume(len(str(value)))
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("checkpoint contains a non-finite number")
+        consume(len(repr(value)))
+        return value
+    if isinstance(value, str):
+        consume(_checkpoint_string_cost(value, remaining[0]))
+        return value
+    if not isinstance(value, (Mapping, list, tuple)):
+        raise TypeError("checkpoint contains a non-JSON value")
+    if depth >= MAX_JSON_NESTING:
+        raise ValueError(f"checkpoint nesting exceeds {MAX_JSON_NESTING} levels")
+    identity = id(value)
+    if identity in active:
+        raise ValueError("checkpoint contains a cycle")
+    active.add(identity)
+    try:
+        if isinstance(value, Mapping):
+            projected: dict[str, Any] = {}
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise TypeError("checkpoint object key is not a string")
+                consume(_checkpoint_string_cost(key, remaining[0]))
+                projected[key] = _project_checkpoint_value(
+                    item,
+                    depth=depth + 1,
+                    active=active,
+                    remaining=remaining,
+                )
+            return projected
+        return [
+            _project_checkpoint_value(
+                item,
+                depth=depth + 1,
+                active=active,
+                remaining=remaining,
+            )
+            for item in value
+        ]
+    finally:
+        active.remove(identity)
+
+
+def _checkpoint_snapshot(checkpoint: Mapping[str, Any]) -> dict[str, Any]:
+    """Materialize one immutable, bounded JSON-native checkpoint snapshot."""
+    projected = _project_checkpoint_value(
+        checkpoint,
+        depth=0,
+        active=set(),
+        remaining=[MAX_JSON_DOCUMENT_BYTES],
+    )
+    if not isinstance(projected, dict):
+        raise TypeError("checkpoint is not an object")
+    if len(canonical_json_bytes(projected)) > MAX_JSON_DOCUMENT_BYTES:
+        raise ValueError(f"checkpoint exceeds {MAX_JSON_DOCUMENT_BYTES} byte limit")
+    return projected
 
 
 @dataclass(frozen=True)
@@ -579,6 +945,8 @@ def _parse_checkpoint(checkpoint: Mapping[str, Any]) -> tuple[_Checkpoint | None
     block = checkpoint["attestation"]
     if not isinstance(block, Mapping) or set(block) != ATTESTATION_BLOCK_KEYS:
         return None, "checkpoint attestation must carry exactly the attestation keys"
+    if not _is_non_empty_string(block.get("ledger_id")):
+        return None, "checkpoint attestation ledger_id must be a non-empty string"
     attestation = _attestation_from_block(block)
     if attestation is None:
         return None, "checkpoint attestation is malformed"
@@ -600,10 +968,18 @@ def _parse_checkpoint(checkpoint: Mapping[str, Any]) -> tuple[_Checkpoint | None
     witness_block = record.get("attestation")
     if not isinstance(witness_block, Mapping):
         return None, "checkpoint witness_record carries no attestation"
+    witnessed_ledger_id = record.get("witnessed_ledger_id")
+    if not _is_non_empty_string(witnessed_ledger_id):
+        return (
+            None,
+            "checkpoint witness_record witnessed_ledger_id must be a non-empty string",
+        )
+    if not _is_non_empty_string(witness_block.get("ledger_id")):
+        return None, "checkpoint witness attestation ledger_id must be a non-empty string"
     witness_attestation = _attestation_from_block(witness_block)
     if witness_attestation is None:
         return None, "checkpoint witness attestation is malformed"
-    if witness_attestation.ledger_id != record.get("witnessed_ledger_id"):
+    if witness_attestation.ledger_id != witnessed_ledger_id:
         return None, "checkpoint witness attestation names another ledger"
 
     countersignature = checkpoint["countersignature"]
@@ -631,6 +1007,7 @@ def verify_checkpoint(
     witness_verifier: HeadVerifier,
     countersign_verifier: CheckpointVerifier,
     authority_verifier: HeadVerifier | None = None,
+    _chain: _Chain | None = None,
 ) -> tuple[bool, str | None]:
     """Check a ledger against a checkpoint its holder retained.
 
@@ -666,9 +1043,15 @@ def verify_checkpoint(
     Raises:
         OSError: If a ledger file cannot be read.
     """
-    parsed, error = _parse_checkpoint(checkpoint)
+    try:
+        snapshot = _checkpoint_snapshot(checkpoint)
+    except (TypeError, ValueError, RecursionError, RuntimeError) as exc:
+        return False, f"checkpoint is malformed ({_terminal_safe(exc)})"
+    parsed, error = _parse_checkpoint(snapshot)
     if parsed is None:
         return False, error
+    if parsed.attestation.ledger_id != parsed.witness_attestation.ledger_id:
+        return False, "checkpoint attestations name different ledgers"
     if (
         parsed.attestation.max_seq != parsed.seq
         or parsed.attestation.head_record_hash != parsed.record_hash
@@ -692,7 +1075,11 @@ def verify_checkpoint(
     if not countersign_verifier.verify_countersignature(payload, parsed.countersignature):
         return False, "checkpoint countersignature invalid (signature or trust root)"
 
-    chain = _walk_ledger(Path(ledger_path).expanduser().resolve(), want_seq=parsed.seq)
+    chain = (
+        _chain
+        if _chain is not None
+        else _walk_ledger(Path(ledger_path).expanduser(), want_seq=parsed.seq)
+    )
     if not chain.ok:
         return False, f"ledger invalid: {chain.error}"
     if chain.count < parsed.seq:

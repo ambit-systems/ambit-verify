@@ -7,29 +7,40 @@ Exit codes: 0 when every requested check passes, 1 when a check fails,
 2 for a usage or I/O problem. Stdout carries exactly one line:
 ``PASS count=N`` or ``FAIL: <reason>``.
 
-Usage errors (bad flag combinations, keys that are not 32 hex bytes, empty
-ids, named files that do not exist) are raised by the parser before any
-verification runs.
+Usage errors (bad flag combinations, keys that are not 32 hex bytes, and empty
+ids) are raised by the parser before any verification runs.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
+from .hashing import strict_json_loads
 from .head_attestation import HeadAttestation, HeadVerifier
 from .head_attestation_ed25519 import Ed25519CountersignVerifier, Ed25519HeadVerifier
 from .verify import (
+    _Chain,
+    _InputLimitError,
+    _read_utf8_document,
+    _terminal_safe,
+    _walk_ledger,
     read_attestation,
     read_attestation_file,
     verify_chain,
     verify_checkpoint,
     verify_witnessed_head,
 )
+
+
+class _TerminalSafeArgumentParser(argparse.ArgumentParser):
+    """Escape attacker-controlled argv in usage failures."""
+
+    def error(self, message: str) -> NoReturn:
+        super().error(_terminal_safe(message))
 
 
 class _CheckError(Exception):
@@ -46,13 +57,6 @@ def _hex_key(value: str) -> bytes:
     return key
 
 
-def _existing_file(value: str) -> Path:
-    path = Path(value)
-    if not path.is_file():
-        raise argparse.ArgumentTypeError(f"file does not exist: {value}")
-    return path
-
-
 def _non_empty(value: str) -> str:
     if not value:
         raise argparse.ArgumentTypeError("must not be empty")
@@ -60,7 +64,7 @@ def _non_empty(value: str) -> str:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _TerminalSafeArgumentParser(
         prog="ambit-verify",
         description=(
             "Verify an Ambit evidence ledger: every record hash, the chain between "
@@ -68,10 +72,10 @@ def _build_parser() -> argparse.ArgumentParser:
             "countersigned checkpoint."
         ),
     )
-    parser.add_argument("ledger", type=_existing_file, help="path to the ledger (JSONL)")
+    parser.add_argument("ledger", type=Path, help="path to the ledger (JSONL)")
     parser.add_argument(
         "--attestation",
-        type=_existing_file,
+        type=Path,
         metavar="PATH",
         help="head attestation to check (default: the .attest sidecar beside LEDGER)",
     )
@@ -89,7 +93,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--witness",
-        type=_existing_file,
+        type=Path,
         metavar="PATH",
         help="witness ledger (JSONL) holding head_witness records for LEDGER",
     )
@@ -113,7 +117,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--checkpoint",
-        type=_existing_file,
+        type=Path,
         metavar="PATH",
         help="countersigned checkpoint (JSON) to check LEDGER against",
     )
@@ -173,36 +177,45 @@ def _head_check(args: argparse.Namespace) -> tuple[HeadVerifier, HeadAttestation
     return Ed25519HeadVerifier(public_key=args.public_key, trust_root_id=trust_root_id), attestation
 
 
-def _witness_check(args: argparse.Namespace) -> None:
-    """Run the witness check."""
-    trust_root_id = args.witness_trust_root_id
-    if trust_root_id is None:
-        sidecar = read_attestation(args.witness)
-        if sidecar is None:
-            raise _CheckError("witness: witness ledger invalid: head attestation missing")
-        trust_root_id = sidecar.trust_root_id
+def _witness_check(args: argparse.Namespace, chain: _Chain) -> None:
+    """Run the witness check against the invocation's ledger snapshot."""
+    sidecar = read_attestation(args.witness)
+    if sidecar is None:
+        raise _CheckError("witness: witness ledger invalid: head attestation missing")
+    trust_root_id = args.witness_trust_root_id or sidecar.trust_root_id
     verifier = Ed25519HeadVerifier(public_key=args.witness_public_key, trust_root_id=trust_root_id)
     ok, error = verify_witnessed_head(
         args.ledger,
         args.witness,
         verifier,
         witnessed_ledger_id=args.witnessed_ledger_id,
+        witness_ledger_attestation=sidecar,
+        _chain=chain,
     )
     if not ok:
         raise _CheckError(f"witness: {error}")
 
 
-def _checkpoint_check(args: argparse.Namespace) -> None:
-    """Run the checkpoint check."""
+def _read_checkpoint(path: Path) -> Mapping[str, Any]:
     try:
-        checkpoint: Any = json.loads(args.checkpoint.read_text(encoding="utf-8"))
+        text = _read_utf8_document(path)
     except UnicodeDecodeError:
         raise _CheckError("checkpoint: checkpoint file is not UTF-8") from None
-    except json.JSONDecodeError as exc:
+    except _InputLimitError as exc:
+        raise _CheckError(f"checkpoint: {exc.reason}") from None
+    try:
+        checkpoint: Any = strict_json_loads(text)
+    except (ValueError, RecursionError) as exc:
         raise _CheckError(f"checkpoint: checkpoint is not valid JSON ({exc})") from None
     if not isinstance(checkpoint, Mapping):
         raise _CheckError("checkpoint: checkpoint is not an object")
+    return checkpoint
 
+
+def _checkpoint_check(
+    args: argparse.Namespace, checkpoint: Mapping[str, Any], chain: _Chain
+) -> None:
+    """Run the checkpoint check against the invocation's ledger snapshot."""
     witness_record = checkpoint.get("witness_record")
     witness_trust_root_id = args.witness_trust_root_id or _trust_root_of(
         witness_record.get("attestation") if isinstance(witness_record, Mapping) else None
@@ -229,24 +242,45 @@ def _checkpoint_check(args: argparse.Namespace) -> None:
         ),
         countersign_verifier=Ed25519CountersignVerifier(public_key=args.countersign_public_key),
         authority_verifier=authority_verifier,
+        _chain=chain,
     )
     if not ok:
         raise _CheckError(f"checkpoint: {error}")
 
 
 def _verify(args: argparse.Namespace) -> int:
-    """Run every requested check in order and return the record count."""
+    """Run every requested check against one ledger snapshot."""
+    checkpoint: Mapping[str, Any] | None = None
+    checkpoint_failure: _CheckError | OSError | None = None
+    want_seq = 0
+    if args.checkpoint is not None:
+        try:
+            checkpoint = _read_checkpoint(args.checkpoint)
+        except (_CheckError, OSError) as exc:
+            checkpoint_failure = exc
+        if checkpoint is not None:
+            candidate = checkpoint.get("seq")
+            if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate > 0:
+                want_seq = candidate
+
+    chain = _walk_ledger(Path(args.ledger).expanduser(), want_seq=want_seq)
     if args.public_key is not None:
         verifier, attestation = _head_check(args)
-        ok, count, error = verify_chain(args.ledger, verifier=verifier, attestation=attestation)
+        ok, count, error = verify_chain(
+            args.ledger, verifier=verifier, attestation=attestation, _chain=chain
+        )
     else:
-        ok, count, error = verify_chain(args.ledger)
+        ok, count, error = verify_chain(args.ledger, _chain=chain)
     if not ok:
         raise _CheckError(error or "verification failed")
     if args.witness is not None:
-        _witness_check(args)
+        _witness_check(args, chain)
     if args.checkpoint is not None:
-        _checkpoint_check(args)
+        if checkpoint_failure is not None:
+            raise checkpoint_failure
+        if checkpoint is None:
+            raise _CheckError("checkpoint: checkpoint is unavailable")
+        _checkpoint_check(args, checkpoint, chain)
     return count
 
 
@@ -271,10 +305,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         count = _verify(args)
     except _CheckError as exc:
-        print(f"FAIL: {exc}")
+        print(f"FAIL: {_terminal_safe(exc)}")
         return 1
     except OSError as exc:
-        print(f"ambit-verify: error: {exc}", file=sys.stderr)
+        print(f"ambit-verify: error: {_terminal_safe(exc)}", file=sys.stderr)
         return 2
     print(f"PASS count={count}")
     return 0

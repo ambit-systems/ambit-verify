@@ -192,6 +192,18 @@ class HmacHeadVerifier:
         """
         if attestation.trust_root_id != self.trust_root_id:
             return False
+        signature_prefix = "hmac-sha256:"
+        encoded = attestation.signature
+        if (
+            not isinstance(encoded, str)
+            or not encoded.startswith(signature_prefix)
+            or len(encoded) != len(signature_prefix) + 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in encoded[len(signature_prefix) :]
+            )
+        ):
+            return False
         digest = hmac.new(
             self._secret.encode("utf-8"),
             attestation_payload(
@@ -203,9 +215,7 @@ class HmacHeadVerifier:
             ),
             "sha256",
         ).hexdigest()
-        return hmac.compare_digest(
-            f"hmac-sha256:{digest}".encode(), attestation.signature.encode("utf-8")
-        )
+        return hmac.compare_digest(f"{signature_prefix}{digest}", encoded)
 
 
 __all__ = [

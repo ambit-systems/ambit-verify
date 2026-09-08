@@ -4,6 +4,34 @@ All notable changes to `ambit-verify` are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Security
+
+- Reject duplicate-key, non-finite, unpaired-surrogate, overflowing, over-deep,
+  oversized, and over-count JSON evidence through terminal-safe controlled failures.
+- Discover suffixless and suffixed ASCII-numbered rotation segments, bound
+  descriptor-relative streaming enumeration of every directory entry, and
+  reject lexical active-file or directory symlinks without reopening checked
+  ledger descriptors.
+- Bind witness selection to its authenticated ledger snapshot, reject
+  equal-sequence witness equivocation, and require every checkpoint authority,
+  witness-attestation, and witness-record ledger identity to be present and
+  equal.
+- Validate causal receipt ordering, concrete actor/adapter identities, signed
+  digests, and explicit typed enforcement state; derive decision-mode
+  delegation blocks from the complete typed reasons and reject consequences
+  claimed by any dry-run decision.
+- Replace unauthenticated `genuine` refusal claims with explicitly structural
+  `blocked` observations and `blocked_refusal_count`.
+- Snapshot immutable checkpoint mappings and tuples into a bounded strict-JSON
+  domain, failing closed on unsupported, cyclic, or over-deep values.
+- Declare the POSIX descriptor-admission platform requirement and smoke-test
+  supported Linux and macOS runners.
+- Pin CI and release workflow actions to reviewed commit SHAs, install one
+  exact checksum-verified uv artifact, and build with the lock-pinned backend
+  in a non-isolated environment.
+
 ## [0.1.0] - 2026-09-02
 
 ### Added
