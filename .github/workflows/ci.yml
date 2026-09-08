@@ -10,21 +10,26 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: ["ubuntu-latest", "macos-latest"]
         python-version: ["3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
+          version: "0.9.10"
+          checksum: "440c4215b171e64061d65d16a23753dd25c29a7f7b1b0446c9e9aed0fa372f27"
           enable-cache: true
           python-version: ${{ matrix.python-version }}
+        env:
+          RUNNER_TOOL_CACHE: "${{ runner.temp }}/ambit-uv-tool-cache"
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --extra dev --group build --locked
 
       - name: Lint (ruff)
         run: uv run ruff check .
@@ -39,7 +44,7 @@ jobs:
         run: uv run pytest
 
       - name: Build distributions
-        run: uv build
+        run: uv build --no-build-isolation
 
       - name: Smoke test the wheel
         run: |

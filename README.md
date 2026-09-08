@@ -3,9 +3,10 @@
 Standalone verifier for Ambit evidence ledgers.
 
 `ambit-verify` reads a hash-chained JSONL ledger and checks it without the
-engine that wrote it. It depends on the Python standard library and
-`cryptography` only. It writes nothing and ships no signer: the Ed25519
-verifiers hold public keys only.
+engine that wrote it. It requires a POSIX platform with descriptor-relative,
+no-follow filesystem admission (supported and tested on Linux and macOS). It
+depends on the Python standard library and `cryptography` only. It writes
+nothing and ships no signer: the Ed25519 verifiers hold public keys only.
 
 ## What the command verifies
 
@@ -14,8 +15,8 @@ verifiers hold public keys only.
 | Record hashes | the ledger | Every record hashes to its own `record_hash`. No field of any record changed after it was written. |
 | Chain | the ledger | Every `prev_hash` equals the previous `record_hash`, `seq` runs 1, 2, 3, ... with no gap, and the first record links to the genesis hash. No record was removed from the middle or reordered. Rotated segments (`ledger.<seq>.jsonl`) are verified in order before the active file. |
 | Head attestation | `--public-key`, optional `--attestation` | An Ed25519 signature by the named key covers the head (`max_seq`, `head_record_hash`), the ledger is exactly at that head, and the record at that `seq` hashes to the attested value. No record was appended, removed, or replaced after the attestation. |
-| Witness | `--witness`, `--witnessed-ledger-id`, `--witness-public-key` | The witness ledger verifies under the witness key, it carries a valid `head_witness` record for the named ledger, and the ledger is exactly at the highest witnessed head. A rollback below an independently witnessed head fails, even when the ledger's own attestation was rolled back with it. |
-| Checkpoint | `--checkpoint`, `--witness-public-key`, `--countersign-public-key`, optional `--witness-trust-root-id`, optional `--public-key` | The checkpoint names one head, its witness record hashes and verifies, its countersignature verifies under the holder's key, and the ledger still carries the checkpointed record at the checkpointed `seq`. Appends after the checkpoint pass. Truncation below it and rollback at it fail. With `--public-key`, the writer's attestation inside the checkpoint is also signature-checked, and the head-attestation check above runs as well. |
+| Witness | `--witness`, `--witnessed-ledger-id`, `--witness-public-key` | One authenticated witness-ledger snapshot carries a valid `head_witness` record for the named ledger, and the ledger is exactly at its highest non-equivocating witnessed head. Conflicting signed heads at the same highest sequence fail. A rollback below an independently witnessed head fails, even when the ledger's own attestation was rolled back with it. |
+| Checkpoint | `--checkpoint`, `--witness-public-key`, `--countersign-public-key`, optional `--witness-trust-root-id`, optional `--public-key` | The checkpoint names one ledger identity and one head, its witness record hashes and verifies, its countersignature verifies under the holder's key, and the ledger still carries the checkpointed record at the checkpointed `seq`. Appends after the checkpoint pass. Truncation below it, rollback at it, and differing authority/witness ledger identities fail. With `--public-key`, the writer's attestation inside the checkpoint is also signature-checked, and the head-attestation check above runs as well. |
 
 ## What a pass does not prove
 
@@ -33,13 +34,22 @@ decision → consequence-intent → outcome relationships:
 from ambit_verify import verify_receipt_links
 
 report = verify_receipt_links("ledger.jsonl")
-print(report.is_valid, report.genuine_refusal_count)
+print(report.is_valid, report.blocked_refusal_count)
 ```
 
-It verifies the hash chain first. It then checks that non-dry-run ALLOW
-decisions have one intent and outcome, linked records agree on the actor,
-adapter, fingerprint, and verdict, and blocked decisions have no downstream
-consequence records.
+It verifies the hash chain first. It then requires the append order
+decision → consequence-intent → outcome, concrete string actor and adapter
+identities, matching fingerprints and verdicts, and one intent and outcome for
+each non-dry-run ALLOW. No dry-run verdict may carry a consequence. A refusal
+is structurally blocked only when `dry_run` is an explicit boolean and its
+declared governance mode demonstrates enforcement; decision-mode hard
+delegation is derived from a typed `delegation_*` match in the complete signed
+reasons, never only the selected rule. Missing or malformed state never marks
+an action blocked.
+
+This API verifies only the self-consistency of the supplied hash chain. It has
+no authority trust anchor, so `blocked` and `blocked_refusal_count` describe
+record structure, not genuine or authenticated provenance.
 
 The `ambit-cli` package exposes this API as `ambit receipts verify`,
 `ambit receipts consequences`, and `ambit receipts refusals`. The standalone
@@ -132,10 +142,11 @@ Stdout carries exactly one line.
 | --- | --- | --- |
 | 0 | `PASS count=N` | Every requested check passed. `N` is the number of records in the chain. |
 | 1 | `FAIL: <reason>` | A check failed. Witness and checkpoint reasons are prefixed `witness:` and `checkpoint:`. |
-| 2 | nothing (message on stderr) | Usage error (bad flag combination, a key that is not 32 hex bytes, an empty id), a named file does not exist, or an I/O error. Usage errors are reported before any check runs. |
+| 2 | nothing (message on stderr) | Usage error (bad flag combination, a key that is not 32 hex bytes, or an empty id), or an I/O error. Usage errors are reported before any check runs. |
 
 Order of checks: chain, head attestation, witness, checkpoint. The first
 failure is reported.
+All requested checks in one command use the same parsed ledger snapshot.
 
 ## Library
 
@@ -167,11 +178,14 @@ the secret attested the head.
 
 ## File formats
 
-**Ledger**: one JSON object per line. Each record carries `seq` (integer,
-1-based), `prev_hash` (64 hex characters; `0` x 64 for `seq` 1) and
-`record_hash` (SHA-256 of the canonical JSON of every other key: keys sorted,
-no whitespace, ASCII-escaped). Other keys are the writer's contract; the
-verifier does not read them; `verify_receipt_links` reads the decision and consequence fields after the chain passes.
+**Ledger**: one strict JSON object per line. Duplicate object keys, `NaN`,
+`Infinity`, `-Infinity`, and finite tokens that overflow to a non-finite value
+are rejected. Each record carries `seq` (integer, 1-based), `prev_hash` (64
+lower-case hex characters; `0` x 64 for `seq` 1) and `record_hash` (SHA-256 of
+the canonical JSON of every other key: keys sorted, no whitespace,
+ASCII-escaped, finite numbers only). Other keys are the writer's contract; the
+chain verifier does not read them; `verify_receipt_links` reads the decision
+and consequence fields after the chain passes.
 
 **Attestation** (`.attest` sidecar or a retained copy): a JSON object with
 `max_seq`, `head_record_hash`, `recorded_at`, `trust_root_id`, `signature`
@@ -180,6 +194,23 @@ signatures are `hmac-sha256:<hex>`.
 
 **Checkpoint**: a JSON object with exactly `seq`, `record_hash`,
 `attestation`, `witness_record` and `countersignature`.
+
+Library callers may supply recursively immutable mappings and tuples; the
+verifier snapshots them once into the same bounded strict-JSON value domain
+before parsing, hashing, or signature verification.
+
+Input processing is bounded before full parsing: a physical ledger line is at
+most 16 MiB; all active/rotated ledger bytes together are at most 1 GiB; a
+ledger contains at most 2,000,000 physical lines, 1,000,000 non-blank records,
+10,000 rotated segments, and its directory scan examines at most 100,000
+entries; an attestation or checkpoint document is at most 1 MiB; and JSON
+nesting is at most 64 object/array levels. Exceeding a ledger bound is a normal
+failed check; an oversized attestation is malformed and an oversized checkpoint
+fails with its limit reason.
+
+Ledger components are opened without following links and accepted only when the
+opened descriptor is a regular file; a FIFO, device, directory, or symlink
+segment fails instead of blocking or escaping the ledger directory.
 
 ## Licence
 

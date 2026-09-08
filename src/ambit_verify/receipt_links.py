@@ -14,6 +14,8 @@ from .verify import read_verified_records
 
 _DECISIONS = frozenset({"ALLOW", "DENY", "ESCALATE"})
 _HEX_DIGITS = frozenset("0123456789abcdef")
+_GOVERNANCE_MODES = frozenset({"discovery", "decision", "enforcement", "constitutional"})
+_ENFORCING_MODES = frozenset({"enforcement", "constitutional"})
 
 
 @dataclass(frozen=True)
@@ -42,7 +44,7 @@ class ReceiptConsequence:
 
 @dataclass(frozen=True)
 class ReceiptRefusal:
-    """One denied or escalated decision and whether it demonstrably blocked."""
+    """One refused decision and its structural enforcement-state observation."""
 
     seq: int
     record_hash: str | None
@@ -53,7 +55,6 @@ class ReceiptRefusal:
     governance_mode: str
     matched_rule_id: str | None
     blocked: bool
-    genuine: bool
     required_authority: Mapping[str, Any] | None
 
 
@@ -66,7 +67,7 @@ class ReceiptLinkReport:
     decision_count: int
     allow_count: int
     refusal_count: int
-    genuine_refusal_count: int
+    blocked_refusal_count: int
     intent_count: int
     outcome_count: int
     unconfirmed_outcome_count: int
@@ -135,13 +136,66 @@ def _check_same_link_fields(
             )
 
 
-def _decision_was_blocked(record: Mapping[str, Any]) -> bool:
-    if record.get("decision") == "ALLOW" or record.get("dry_run") is True:
+def _validate_link_fields(
+    record: Mapping[str, Any],
+    *,
+    kind: str,
+    seq: int,
+    issues: list[ReceiptLinkIssue],
+) -> None:
+    for key in ("actor_id", "adapter_id"):
+        if _non_empty_string(record.get(key)) is None:
+            _issue(
+                issues,
+                f"{kind}_invalid_{key}",
+                f"{kind} {seq} {key} must be a non-empty string",
+                seq=seq,
+            )
+    if _sha256(record.get("request_fingerprint")) is None:
+        _issue(
+            issues,
+            f"{kind}_invalid_request_fingerprint",
+            f"{kind} {seq} request_fingerprint must be a lowercase SHA-256 hex digest",
+            seq=seq,
+        )
+
+
+def _decision_mode_has_hard_delegation(record: Mapping[str, Any]) -> bool:
+    """Match Authority's complete-reasons hard-delegation predicate."""
+    reasons = record.get("reasons")
+    if not isinstance(reasons, (list, tuple)):
         return False
-    if record.get("governance_mode") != "decision":
+    hard_delegation = False
+    for reason in reasons:
+        if not isinstance(reason, Mapping):
+            return False
+        rule_id = reason.get("rule_id")
+        result = reason.get("result")
+        if not isinstance(rule_id, str) or not rule_id or not isinstance(result, str) or not result:
+            return False
+        if rule_id.startswith("delegation_") and result == "match":
+            hard_delegation = True
+    return hard_delegation
+
+
+def _decision_was_blocked(record: Mapping[str, Any]) -> bool:
+    decision = record.get("decision")
+    dry_run = record.get("dry_run")
+    governance_mode = record.get("governance_mode")
+    if (
+        not isinstance(decision, str)
+        or decision not in {"DENY", "ESCALATE"}
+        or not isinstance(dry_run, bool)
+        or dry_run
+        or not isinstance(governance_mode, str)
+        or governance_mode not in _GOVERNANCE_MODES
+    ):
+        return False
+    if governance_mode in _ENFORCING_MODES:
         return True
-    matched_rule_id = record.get("matched_rule_id")
-    return isinstance(matched_rule_id, str) and matched_rule_id.startswith("delegation_")
+    if governance_mode != "decision":
+        return False
+    return _decision_mode_has_hard_delegation(record)
 
 
 def _required_authority(record: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -191,7 +245,7 @@ def verify_receipt_records(records: Iterable[Mapping[str, Any]]) -> ReceiptLinkR
 
     for seq, decision_record in decisions.items():
         verdict = decision_record.get("decision")
-        if verdict not in _DECISIONS:
+        if not isinstance(verdict, str) or verdict not in _DECISIONS:
             _issue(
                 issues,
                 "decision_invalid_verdict",
@@ -208,7 +262,23 @@ def verify_receipt_records(records: Iterable[Mapping[str, Any]]) -> ReceiptLinkR
                 f"decision {seq} has inconsistent record identity",
                 seq=seq,
             )
-        for key in ("request_fingerprint", "policy_hash", "ontology_hash"):
+        _validate_link_fields(decision_record, kind="decision", seq=seq, issues=issues)
+        governance_mode = decision_record.get("governance_mode")
+        if not isinstance(governance_mode, str) or governance_mode not in _GOVERNANCE_MODES:
+            _issue(
+                issues,
+                "decision_invalid_governance_mode",
+                f"decision {seq} governance_mode is not declared",
+                seq=seq,
+            )
+        if not isinstance(decision_record.get("dry_run"), bool):
+            _issue(
+                issues,
+                "decision_invalid_dry_run",
+                f"decision {seq} dry_run must be a boolean",
+                seq=seq,
+            )
+        for key in ("policy_hash", "ontology_hash"):
             if _sha256(decision_record.get(key)) is None:
                 _issue(
                     issues,
@@ -217,7 +287,15 @@ def verify_receipt_records(records: Iterable[Mapping[str, Any]]) -> ReceiptLinkR
                     seq=seq,
                 )
         actor = decision_record.get("actor")
-        if isinstance(actor, Mapping) and actor.get("id") != decision_record.get("actor_id"):
+        actor_id = _non_empty_string(decision_record.get("actor_id"))
+        if not isinstance(actor, Mapping) or _non_empty_string(actor.get("id")) is None:
+            _issue(
+                issues,
+                "decision_actor_invalid",
+                f"decision {seq} actor must be an object with a non-empty string id",
+                seq=seq,
+            )
+        elif actor.get("id") != actor_id:
             _issue(
                 issues,
                 "decision_actor_id_mismatch",
@@ -227,6 +305,7 @@ def verify_receipt_records(records: Iterable[Mapping[str, Any]]) -> ReceiptLinkR
 
     intents_by_decision: dict[int, list[int]] = {}
     for seq, intent in intents.items():
+        _validate_link_fields(intent, kind="consequence_intent", seq=seq, issues=issues)
         decision_seq = _positive_int(intent.get("decision_seq"))
         if decision_seq is None:
             _issue(
@@ -246,6 +325,14 @@ def verify_receipt_records(records: Iterable[Mapping[str, Any]]) -> ReceiptLinkR
                 related_seq=decision_seq,
             )
             continue
+        if decision_seq >= seq:
+            _issue(
+                issues,
+                "intent_not_after_decision",
+                f"consequence intent {seq} must follow decision {decision_seq}",
+                seq=seq,
+                related_seq=decision_seq,
+            )
         intents_by_decision.setdefault(decision_seq, []).append(seq)
         _check_same_link_fields(
             intent,
@@ -269,6 +356,7 @@ def verify_receipt_records(records: Iterable[Mapping[str, Any]]) -> ReceiptLinkR
     outcomes_by_decision: dict[int, list[int]] = {}
     unconfirmed_count = 0
     for seq, outcome in outcomes.items():
+        _validate_link_fields(outcome, kind="outcome", seq=seq, issues=issues)
         decision_seq = _positive_int(outcome.get("decision_seq"))
         intent_seq = _positive_int(outcome.get("intent_seq"))
         success = outcome.get("success")
@@ -283,6 +371,14 @@ def verify_receipt_records(records: Iterable[Mapping[str, Any]]) -> ReceiptLinkR
             unconfirmed_count += 1
 
         linked_decision = decisions.get(decision_seq) if decision_seq is not None else None
+        if decision_seq is not None and decision_seq >= seq:
+            _issue(
+                issues,
+                "outcome_not_after_decision",
+                f"outcome {seq} must follow decision {decision_seq}",
+                seq=seq,
+                related_seq=decision_seq,
+            )
         if decision_seq is None:
             _issue(
                 issues,
@@ -334,6 +430,14 @@ def verify_receipt_records(records: Iterable[Mapping[str, Any]]) -> ReceiptLinkR
                 related_seq=intent_seq,
             )
         else:
+            if intent_seq >= seq:
+                _issue(
+                    issues,
+                    "outcome_not_after_intent",
+                    f"outcome {seq} must follow consequence intent {intent_seq}",
+                    seq=seq,
+                    related_seq=intent_seq,
+                )
             outcomes_by_intent.setdefault(intent_seq, []).append(seq)
             intent_decision_seq = _positive_int(linked_intent.get("decision_seq"))
             if decision_seq != intent_decision_seq:
@@ -374,7 +478,14 @@ def verify_receipt_records(records: Iterable[Mapping[str, Any]]) -> ReceiptLinkR
     for decision_seq, decision in decisions.items():
         linked_intents = intents_by_decision.get(decision_seq, [])
         linked_outcomes = outcomes_by_decision.get(decision_seq, [])
-        if decision.get("decision") == "ALLOW" and decision.get("dry_run") is not True:
+        if decision.get("dry_run") is True and (linked_intents or linked_outcomes):
+            _issue(
+                issues,
+                "dry_run_decision_has_consequence",
+                f"dry-run decision {decision_seq} has downstream consequence records",
+                seq=decision_seq,
+            )
+        elif decision.get("decision") == "ALLOW" and decision.get("dry_run") is not True:
             if not linked_intents:
                 _issue(
                     issues,
@@ -402,10 +513,10 @@ def verify_receipt_records(records: Iterable[Mapping[str, Any]]) -> ReceiptLinkR
             consequence_rows.append(
                 ReceiptConsequence(
                     decision_seq=decision_seq,
-                    decision=str(decision.get("decision", "")),
-                    actor_id=str(decision.get("actor_id", "")),
-                    adapter_id=str(decision.get("adapter_id", "")),
-                    request_fingerprint=str(decision.get("request_fingerprint", "")),
+                    decision=_non_empty_string(decision.get("decision")) or "",
+                    actor_id=_non_empty_string(decision.get("actor_id")) or "",
+                    adapter_id=_non_empty_string(decision.get("adapter_id")) or "",
+                    request_fingerprint=_sha256(decision.get("request_fingerprint")) or "",
                     intent_seqs=intent_seqs,
                     outcome_seqs=outcome_seqs,
                     outcome_states=tuple(
@@ -426,28 +537,22 @@ def verify_receipt_records(records: Iterable[Mapping[str, Any]]) -> ReceiptLinkR
     refusal_rows: list[ReceiptRefusal] = []
     for decision_seq, decision in decisions.items():
         verdict = decision.get("decision")
-        if verdict not in {"DENY", "ESCALATE"}:
+        if not isinstance(verdict, str) or verdict not in {"DENY", "ESCALATE"}:
             continue
         blocked = _decision_was_blocked(decision)
-        genuine = (
-            blocked
-            and not intents_by_decision.get(decision_seq)
-            and not outcomes_by_decision.get(decision_seq)
-        )
         record_hash = decision.get("record_hash")
         matched_rule_id = decision.get("matched_rule_id")
         refusal_rows.append(
             ReceiptRefusal(
                 seq=decision_seq,
                 record_hash=record_hash if isinstance(record_hash, str) else None,
-                decision=str(verdict),
-                actor_id=str(decision.get("actor_id", "")),
-                adapter_id=str(decision.get("adapter_id", "")),
-                request_fingerprint=str(decision.get("request_fingerprint", "")),
-                governance_mode=str(decision.get("governance_mode", "")),
+                decision=verdict,
+                actor_id=_non_empty_string(decision.get("actor_id")) or "",
+                adapter_id=_non_empty_string(decision.get("adapter_id")) or "",
+                request_fingerprint=_sha256(decision.get("request_fingerprint")) or "",
+                governance_mode=_non_empty_string(decision.get("governance_mode")) or "",
                 matched_rule_id=matched_rule_id if isinstance(matched_rule_id, str) else None,
                 blocked=blocked,
-                genuine=genuine,
                 required_authority=_required_authority(decision),
             )
         )
@@ -459,7 +564,7 @@ def verify_receipt_records(records: Iterable[Mapping[str, Any]]) -> ReceiptLinkR
             1 for decision in decisions.values() if decision.get("decision") == "ALLOW"
         ),
         refusal_count=len(refusal_rows),
-        genuine_refusal_count=sum(1 for refusal in refusal_rows if refusal.genuine),
+        blocked_refusal_count=sum(1 for refusal in refusal_rows if refusal.blocked),
         intent_count=len(intents),
         outcome_count=len(outcomes),
         unconfirmed_outcome_count=unconfirmed_count,
@@ -470,7 +575,11 @@ def verify_receipt_records(records: Iterable[Mapping[str, Any]]) -> ReceiptLinkR
 
 
 def verify_receipt_links(path: str | Path) -> ReceiptLinkReport:
-    """Verify a ledger's hash chain, then its receipt-link semantics."""
+    """Check bare-chain integrity and structural receipt-link semantics.
+
+    No authority trust anchor is accepted here, so blocked results describe
+    record structure and never authenticate who produced the ledger.
+    """
     chain_ok, records, error = read_verified_records(path)
     if not chain_ok:
         issue = ReceiptLinkIssue(code="chain_invalid", message=error or "chain verification failed")
@@ -480,7 +589,7 @@ def verify_receipt_links(path: str | Path) -> ReceiptLinkReport:
             decision_count=0,
             allow_count=0,
             refusal_count=0,
-            genuine_refusal_count=0,
+            blocked_refusal_count=0,
             intent_count=0,
             outcome_count=0,
             unconfirmed_outcome_count=0,

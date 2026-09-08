@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [build-system]
-requires = ["hatchling>=1.24.0"]
+requires = ["hatchling==1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -20,7 +20,8 @@ classifiers = [
   "Environment :: Console",
   "Intended Audience :: Developers",
   "Intended Audience :: Information Technology",
-  "Operating System :: OS Independent",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
@@ -46,6 +47,11 @@ dev = [
   "mypy==1.19.1",
   "pytest>=7.0",
   "ruff==0.15.2",
+]
+
+[dependency-groups]
+build = [
+  "hatchling==1.27.0",
 ]
 
 [tool.pytest.ini_options]

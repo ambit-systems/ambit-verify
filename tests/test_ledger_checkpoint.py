@@ -18,10 +18,12 @@ ledgers now agree on.
 from __future__ import annotations
 
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import pytest
 
+import ambit_verify.verify as verify_module
 from ambit_verify import (
     Ed25519CountersignVerifier,
     Ed25519HeadVerifier,
@@ -132,6 +134,44 @@ def test_witnessed_head_accepts_an_intact_ledger(tmp_path: Path) -> None:
         authority_path, witness_path, planes.witness_verifier, witnessed_ledger_id=LEDGER_ID
     )
     assert ok, error
+
+
+def test_witness_and_checkpoint_reject_active_ledger_symlinks(tmp_path: Path) -> None:
+    planes = _Planes()
+    authority_path = _authority(tmp_path, 1)
+    witness_path = tmp_path / "witness.jsonl"
+    checkpoint = _checkpoint(planes, witness_path, authority_path)
+    links = tmp_path / "links"
+    links.mkdir()
+    authority_link = links / authority_path.name
+    authority_link.symlink_to(authority_path)
+
+    ok, error = verify_witnessed_head(
+        authority_link,
+        witness_path,
+        planes.witness_verifier,
+        witnessed_ledger_id=LEDGER_ID,
+    )
+    assert not ok
+    assert error == (
+        "witnessed ledger invalid: authority.jsonl: ledger component is not a regular file"
+    )
+
+    ok, error = _verify(planes, authority_link, checkpoint)
+    assert not ok
+    assert error == "ledger invalid: authority.jsonl: ledger component is not a regular file"
+
+    witness_link = links / witness_path.name
+    witness_link.symlink_to(witness_path)
+    ok, error = verify_witnessed_head(
+        authority_path,
+        witness_link,
+        planes.witness_verifier,
+        witnessed_ledger_id=LEDGER_ID,
+        witness_ledger_attestation=read_attestation(witness_path),
+    )
+    assert not ok
+    assert error == "witness ledger invalid: witness.jsonl: ledger component is not a regular file"
 
 
 def test_witnessed_head_takes_the_highest_valid_witness(tmp_path: Path) -> None:
@@ -270,6 +310,74 @@ def test_witnessed_head_ignores_witnesses_under_another_key(tmp_path: Path) -> N
     assert error is not None and "witness ledger invalid" in error
 
 
+def test_witness_selection_uses_the_authenticated_snapshot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    planes = _Planes()
+    authority_path = _authority(tmp_path, 1)
+    authority_at_one = authority_path.read_bytes()
+    witness_path = tmp_path / "witness.jsonl"
+    _witness(planes, witness_path, authority_path)
+    witness_at_one = witness_path.read_bytes()
+    append(authority_path, score(2))
+    _witness(planes, witness_path, authority_path)
+
+    original_lines = verify_module._lines
+    calls = 0
+
+    def swapping_lines(files: list[Path], **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        yield from original_lines(files, **kwargs)
+        if calls == 1:
+            witness_path.write_bytes(witness_at_one)
+            authority_path.write_bytes(authority_at_one)
+
+    monkeypatch.setattr(verify_module, "_lines", swapping_lines)
+    ok, error = verify_witnessed_head(
+        authority_path,
+        witness_path,
+        planes.witness_verifier,
+        witnessed_ledger_id=LEDGER_ID,
+    )
+    assert not ok
+    assert error is not None and "rollback" in error.lower()
+
+
+@pytest.mark.parametrize("reverse", [False, True], ids=["first_matches", "second_matches"])
+def test_equal_sequence_conflicting_witnesses_fail_as_equivocation(
+    tmp_path: Path, reverse: bool
+) -> None:
+    planes = _Planes()
+    authority_path = _authority(tmp_path, 1)
+    witness_path = tmp_path / "witness.jsonl"
+    seq, head_hash = read_head(authority_path)
+    matching = planes.witness_signer.sign_head(seq, head_hash, TS, ledger_id=LEDGER_ID)
+    conflicting = planes.witness_signer.sign_head(seq, "f" * 64, TS, ledger_id=LEDGER_ID)
+    attestations = [matching, conflicting]
+    if reverse:
+        attestations.reverse()
+    for attestation in attestations:
+        append(
+            witness_path,
+            {
+                "record_type": "head_witness",
+                "witnessed_ledger_id": LEDGER_ID,
+                "attestation": attestation_block(attestation),
+            },
+        )
+    attest_head(witness_path, planes.witness_signer, ledger_id="observatory-ledger")
+
+    ok, error = verify_witnessed_head(
+        authority_path,
+        witness_path,
+        planes.witness_verifier,
+        witnessed_ledger_id=LEDGER_ID,
+    )
+    assert not ok
+    assert error == f"witness equivocation at seq {seq}"
+
+
 def test_intact_ledger_passes(tmp_path: Path) -> None:
     planes = _Planes()
     authority_path = _authority(tmp_path, 5)
@@ -305,6 +413,95 @@ def test_checkpoint_over_a_ledger_that_attested_its_own_head_passes(tmp_path: Pa
 
     ok, error = _verify(planes, authority_path, checkpoint)
     assert ok, error
+
+
+def test_checkpoint_requires_one_signed_ledger_identity(tmp_path: Path) -> None:
+    planes = _Planes()
+    authority_path = _authority(tmp_path, 5)
+    checkpoint = _checkpoint(planes, tmp_path / "witness.jsonl", authority_path)
+    attestation = planes.authority_signer.sign_head(
+        checkpoint["seq"],
+        checkpoint["record_hash"],
+        TS,
+        ledger_id="another-ledger",
+    )
+    authority_block = attestation_block(attestation)
+    checkpoint["attestation"] = authority_block
+    checkpoint["countersignature"] = planes.countersigner.sign_countersignature(
+        checkpoint_payload(
+            seq=checkpoint["seq"],
+            record_hash=checkpoint["record_hash"],
+            attestation_hash=hash_object(authority_block),
+            witness_record_hash=checkpoint["witness_record"]["record_hash"],
+        )
+    )
+
+    ok, error = _verify(planes, authority_path, checkpoint)
+    assert not ok
+    assert error == "checkpoint attestations name different ledgers"
+
+
+@pytest.mark.parametrize(
+    ("missing_identity", "expected_error"),
+    [
+        (
+            "all",
+            "checkpoint attestation ledger_id must be a non-empty string",
+        ),
+        (
+            "authority",
+            "checkpoint attestation ledger_id must be a non-empty string",
+        ),
+        (
+            "witness_attestation",
+            "checkpoint witness attestation ledger_id must be a non-empty string",
+        ),
+        (
+            "witness_record",
+            "checkpoint witness_record witnessed_ledger_id must be a non-empty string",
+        ),
+    ],
+)
+def test_checkpoint_requires_each_ledger_identity_even_when_signatures_are_valid(
+    missing_identity: str, expected_error: str, tmp_path: Path
+) -> None:
+    planes = _Planes()
+    authority_path = _authority(tmp_path, 5)
+    checkpoint = _checkpoint(planes, tmp_path / "witness.jsonl", authority_path)
+
+    if missing_identity in {"all", "authority"}:
+        authority_attestation = planes.authority_signer.sign_head(
+            checkpoint["seq"],
+            checkpoint["record_hash"],
+            TS,
+            ledger_id=None,
+        )
+        checkpoint["attestation"] = attestation_block(authority_attestation)
+
+    witness_record = checkpoint["witness_record"]
+    if missing_identity in {"all", "witness_attestation"}:
+        witness_attestation = planes.witness_signer.sign_head(
+            checkpoint["seq"],
+            checkpoint["record_hash"],
+            TS,
+            ledger_id=None,
+        )
+        witness_record["attestation"] = attestation_block(witness_attestation)
+    if missing_identity in {"all", "witness_record"}:
+        witness_record.pop("witnessed_ledger_id")
+    witness_unsigned = {key: value for key, value in witness_record.items() if key != "record_hash"}
+    witness_record["record_hash"] = hash_object(witness_unsigned)
+
+    checkpoint["countersignature"] = planes.countersigner.sign_countersignature(
+        checkpoint_payload(
+            seq=checkpoint["seq"],
+            record_hash=checkpoint["record_hash"],
+            attestation_hash=hash_object(checkpoint["attestation"]),
+            witness_record_hash=checkpoint["witness_record"]["record_hash"],
+        )
+    )
+
+    assert _verify(planes, authority_path, checkpoint) == (False, expected_error)
 
 
 def test_appended_only_ledger_passes(tmp_path: Path) -> None:
@@ -473,6 +670,62 @@ def test_authority_verifier_is_optional(tmp_path: Path) -> None:
         countersign_verifier=planes.countersign_verifier,
     )
     assert ok, error
+
+
+def _freeze_checkpoint_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return MappingProxyType(
+            {key: _freeze_checkpoint_value(item) for key, item in value.items()}
+        )
+    if isinstance(value, list):
+        return tuple(_freeze_checkpoint_value(item) for item in value)
+    return value
+
+
+def test_recursively_immutable_checkpoint_verifies_without_exception(
+    tmp_path: Path,
+) -> None:
+    planes = _Planes()
+    authority_path = _authority(tmp_path, 5)
+    checkpoint = _checkpoint(planes, tmp_path / "witness.jsonl", authority_path)
+    witness_record = checkpoint["witness_record"]
+    witness_record["metadata"] = [{"retained": True}, ["immutable"]]
+    witness_unsigned = {key: value for key, value in witness_record.items() if key != "record_hash"}
+    witness_record["record_hash"] = hash_object(witness_unsigned)
+    checkpoint["countersignature"] = planes.countersigner.sign_countersignature(
+        checkpoint_payload(
+            seq=checkpoint["seq"],
+            record_hash=checkpoint["record_hash"],
+            attestation_hash=hash_object(checkpoint["attestation"]),
+            witness_record_hash=witness_record["record_hash"],
+        )
+    )
+
+    frozen = _freeze_checkpoint_value(checkpoint)
+
+    assert _verify(planes, authority_path, frozen) == (True, None)
+
+
+@pytest.mark.parametrize("invalid_value", ["unsupported", "cycle", "overdeep"])
+def test_non_json_checkpoint_values_fail_closed(invalid_value: str, tmp_path: Path) -> None:
+    planes = _Planes()
+    authority_path = _authority(tmp_path, 5)
+    checkpoint = _checkpoint(planes, tmp_path / "witness.jsonl", authority_path)
+    if invalid_value == "unsupported":
+        value: Any = object()
+    elif invalid_value == "cycle":
+        value = []
+        value.append(value)
+    else:
+        value = None
+        for _ in range(65):
+            value = [value]
+    checkpoint["witness_record"]["invalid"] = value
+
+    ok, error = _verify(planes, authority_path, checkpoint)
+
+    assert not ok
+    assert error is not None and error.startswith("checkpoint is malformed")
 
 
 @pytest.mark.parametrize(

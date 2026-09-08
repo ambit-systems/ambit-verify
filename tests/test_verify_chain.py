@@ -10,7 +10,14 @@ from pathlib import Path
 
 import pytest
 
-from ambit_verify import GENESIS_HASH, LedgerReadError, hash_object, read_head, verify_chain
+from ambit_verify import (
+    GENESIS_HASH,
+    LedgerReadError,
+    hash_object,
+    ledger_files,
+    read_head,
+    verify_chain,
+)
 from ledger_fixtures import append, filled, score
 
 
@@ -23,6 +30,28 @@ def test_empty_file_passes_with_zero_records(tmp_path: Path) -> None:
     path = tmp_path / "ledger.jsonl"
     path.write_text("", encoding="utf-8")
     assert verify_chain(path) == (True, 0, None)
+
+
+def test_suffixless_rotated_ledger_is_discovered_and_verified(
+    tmp_path: Path,
+) -> None:
+    active = tmp_path / "ledger"
+    segment = tmp_path / "ledger.1"
+    first = append(segment, score(1))
+    active.write_text("", encoding="utf-8")
+
+    assert ledger_files(active) == [segment, active]
+    assert verify_chain(active) == (True, 1, None)
+
+    second = {
+        **score(2),
+        "seq": 2,
+        "prev_hash": first["record_hash"],
+    }
+    second["record_hash"] = hash_object(second)
+    active.write_text(json.dumps(second) + "\n", encoding="utf-8")
+
+    assert verify_chain(active) == (True, 2, None)
 
 
 def test_missing_file_fails(tmp_path: Path) -> None:
@@ -103,6 +132,78 @@ def test_malformed_line_fails_with_position(tmp_path: Path, line: str, error: st
     assert not ok
     assert count == 1
     assert actual is not None and actual.startswith(error)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '{"seq":999,"seq":1,"prev_hash":"' + GENESIS_HASH + '","record_hash":"' + "0" * 64 + '"}',
+        '{"seq":1,"prev_hash":"'
+        + GENESIS_HASH
+        + '","nested":{"key":"first","key":"second"},"record_hash":"'
+        + "0" * 64
+        + '"}',
+        '{"seq":1,"prev_hash":"' + GENESIS_HASH + '","value":NaN,"record_hash":"' + "0" * 64 + '"}',
+        '{"seq":1,"prev_hash":"'
+        + GENESIS_HASH
+        + '","value":Infinity,"record_hash":"'
+        + "0" * 64
+        + '"}',
+        '{"seq":1,"prev_hash":"'
+        + GENESIS_HASH
+        + '","value":-Infinity,"record_hash":"'
+        + "0" * 64
+        + '"}',
+        '{"seq":1,"prev_hash":"'
+        + GENESIS_HASH
+        + '","value":1e400,"record_hash":"'
+        + "0" * 64
+        + '"}',
+    ],
+    ids=[
+        "duplicate_top_level",
+        "duplicate_nested",
+        "nan",
+        "positive_infinity",
+        "negative_infinity",
+        "finite_token_overflow",
+    ],
+)
+def test_ambiguous_json_is_rejected_before_hashing(tmp_path: Path, line: str) -> None:
+    path = tmp_path / "ledger.jsonl"
+    path.write_text(line + "\n", encoding="utf-8")
+
+    ok, count, error = verify_chain(path)
+    assert not ok
+    assert count == 0
+    assert error is not None and error.startswith("ledger.jsonl:1: invalid JSON")
+
+
+def test_huge_integer_is_a_controlled_json_failure(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    path.write_text(
+        '{"seq":1,"prev_hash":"' + GENESIS_HASH + '","value":' + "9" * 5000 + "}\n",
+        encoding="utf-8",
+    )
+
+    ok, count, error = verify_chain(path)
+    assert not ok
+    assert count == 0
+    assert error is not None and error.startswith("ledger.jsonl:1: invalid JSON")
+
+
+def test_excessive_json_nesting_is_a_controlled_failure(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    nested = "[" * 65 + "null" + "]" * 65
+    path.write_text(
+        '{"seq":1,"prev_hash":"' + GENESIS_HASH + '","value":' + nested + "}\n",
+        encoding="utf-8",
+    )
+
+    ok, count, error = verify_chain(path)
+    assert not ok
+    assert count == 0
+    assert error == "ledger.jsonl:1: invalid JSON (JSON nesting exceeds 64 levels)"
 
 
 def test_seq_true_is_not_seq_one(tmp_path: Path) -> None:
