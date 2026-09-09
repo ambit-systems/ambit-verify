@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import tomllib
 from pathlib import Path
@@ -19,7 +20,39 @@ _SETUP_UV = re.compile(
     re.MULTILINE,
 )
 _UV_VERSION = "0.9.10"
-_UV_CHECKSUM = "440c4215b171e64061d65d16a23753dd25c29a7f7b1b0446c9e9aed0fa372f27"
+_UV_CHECKSUMS = {
+    "ubuntu-latest": "440c4215b171e64061d65d16a23753dd25c29a7f7b1b0446c9e9aed0fa372f27",
+    "macos-latest": "af171d5a4eb1c502819de32740aa811ff71851b1f5ec2d8bd0dda302ed9554c2",
+}
+_MATRIX_CHECKSUM = "${{ matrix.uv-checksum }}"
+_MATRIX_ENTRY = re.compile(
+    r'^ {10}- os: "([^"]+)"\n {12}uv-checksum: "([0-9a-f]{64})"$', re.MULTILINE
+)
+
+
+def _assert_installer_identities(content: str, *, matrix: bool) -> None:
+    if matrix:
+        platforms = re.search(r"^ {8}os: (\[[^\n]+\])$", content, re.MULTILINE)
+        assert platforms is not None
+        assert json.loads(platforms.group(1)) == list(_UV_CHECKSUMS)
+        versions = re.search(r"^ {8}python-version: (\[[^\n]+\])$", content, re.MULTILINE)
+        assert versions is not None
+        assert json.loads(versions.group(1)) == ["3.12", "3.13", "3.14"]
+        entries = _MATRIX_ENTRY.findall(content)
+        assert len(entries) == len(_UV_CHECKSUMS)
+        assert dict(entries) == _UV_CHECKSUMS
+        expected = _MATRIX_CHECKSUM
+    else:
+        assert "runs-on: ubuntu-latest" in content
+        expected = _UV_CHECKSUMS["ubuntu-latest"]
+    blocks = _SETUP_UV.findall(content)
+    assert blocks and len(blocks) == content.count("astral-sh/setup-uv@")
+    for block in blocks:
+        version = re.search(r'^\s+version:\s+"([^"]+)"$', block, re.MULTILINE)
+        checksum = re.search(r'^\s+checksum:\s+"([^"]+)"$', block, re.MULTILINE)
+        assert version is not None and version.group(1) == _UV_VERSION
+        assert checksum is not None and checksum.group(1) == expected
+        assert 'RUNNER_TOOL_CACHE: "${{ runner.temp }}/ambit-uv-tool-cache"' in block
 
 
 @pytest.mark.parametrize("workflow", ["ci.yml", "release.yml"])
@@ -33,21 +66,40 @@ def test_external_workflow_actions_are_pinned_to_full_commit_shas(workflow: str)
     )
 
 
-def test_every_uv_installer_has_one_reviewed_content_identity() -> None:
-    identities: set[tuple[str, str]] = set()
+def test_every_uv_installer_has_a_reviewed_platform_content_identity() -> None:
     for workflow in ("ci.yml", "release.yml"):
         content = (ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
-        blocks = _SETUP_UV.findall(content)
-        assert len(blocks) == content.count("astral-sh/setup-uv@")
-        for block in blocks:
-            version = re.search(r'^\s+version:\s+"([^"]+)"$', block, re.MULTILINE)
-            checksum = re.search(r'^\s+checksum:\s+"([0-9a-f]{64})"$', block, re.MULTILINE)
-            assert version is not None
-            assert checksum is not None
-            identities.add((version.group(1), checksum.group(1)))
-            assert 'RUNNER_TOOL_CACHE: "${{ runner.temp }}/ambit-uv-tool-cache"' in block
+        _assert_installer_identities(content, matrix=workflow == "ci.yml")
 
-    assert identities == {(_UV_VERSION, _UV_CHECKSUM)}
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (_UV_CHECKSUMS["macos-latest"], _UV_CHECKSUMS["ubuntu-latest"]),
+        (_UV_CHECKSUMS["ubuntu-latest"], _UV_CHECKSUMS["macos-latest"]),
+        ("macos-latest", "windows-latest"),
+        ('["3.12", "3.13", "3.14"]', '["3.12", "3.14"]'),
+        (_MATRIX_CHECKSUM, _UV_CHECKSUMS["ubuntu-latest"]),
+        (_UV_VERSION, "0.9.11"),
+        (_UV_CHECKSUMS["macos-latest"], ""),
+    ],
+)
+def test_installer_policy_rejects_wrong_or_unpinned_identity(old: str, new: str) -> None:
+    content = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    altered = content.replace(old, new)
+    assert altered != content
+    with pytest.raises(AssertionError):
+        _assert_installer_identities(altered, matrix=True)
+
+
+def test_installer_policy_rejects_missing_or_duplicate_platform_mapping() -> None:
+    content = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    match = _MATRIX_ENTRY.search(content)
+    assert match is not None
+    entry = match.group()
+    for replacement in ("", entry + "\n" + entry):
+        with pytest.raises(AssertionError):
+            _assert_installer_identities(content.replace(entry, replacement), matrix=True)
 
 
 def test_release_build_uses_the_locked_backend_environment() -> None:

@@ -16,13 +16,19 @@ jobs:
       matrix:
         os: ["ubuntu-latest", "macos-latest"]
         python-version: ["3.12", "3.13", "3.14"]
+        include:
+          # uv 0.9.10 archives verified against upstream release bytes.
+          - os: "ubuntu-latest"
+            uv-checksum: "440c4215b171e64061d65d16a23753dd25c29a7f7b1b0446c9e9aed0fa372f27"
+          - os: "macos-latest"
+            uv-checksum: "af171d5a4eb1c502819de32740aa811ff71851b1f5ec2d8bd0dda302ed9554c2"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.9.10"
-          checksum: "440c4215b171e64061d65d16a23753dd25c29a7f7b1b0446c9e9aed0fa372f27"
+          checksum: "${{ matrix.uv-checksum }}"
           enable-cache: true
           python-version: ${{ matrix.python-version }}
         env:
