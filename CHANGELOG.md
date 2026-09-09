@@ -6,7 +6,17 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Authenticate bounded behavioural snapshots against explicit observer/source
+  keys, actor/domain/audience, model configuration and evaluation time. Retained
+  source verification checks the full chain against its signed head; it does
+  not prove the numerical model or confer action authority.
+
 ### Security
+
+- Retain the parsed record that passed the source hash check. A later mutation
+  of the caller's source object cannot substitute another actor's observation.
 
 - Reject duplicate-key, non-finite, unpaired-surrogate, overflowing, over-deep,
   oversized, and over-count JSON evidence through terminal-safe controlled failures.

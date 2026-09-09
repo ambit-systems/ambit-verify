@@ -1,5 +1,25 @@
 # ambit-verify
 
+## Authenticated behavioural snapshots
+
+`ambit_verify.behavioural` provides two distinct public-key-only checks:
+
+- `authenticate_behavioural_snapshot`: strict bounded parsing, observer
+  signature, pinned actor/domain/audience/model configuration, signed source
+  head and explicit evaluation-time freshness.
+- `verify_behavioural_snapshot`: additionally verifies the separately retained
+  complete source history and actor observation count. Source records must
+  accompany an offline export; a head hash alone is insufficient.
+
+Neither check proves the observer computed its score correctly. Observatory's
+separate numerical replay reconstructs from the original receipts. Canonical
+admission/rollback checks belong to the Authority/Core path, not this stateless
+verifier. Keys, expected identities and evaluation time are caller-owned trust
+inputs; no embedded key chooses the trust basis. Limits are 1 MiB per snapshot,
+32 value levels, 100,000 values and 4,096 complete source records. Old shadow
+checkpoints are not authenticated snapshots.
+
+
 Standalone verifier for Ambit evidence ledgers.
 
 `ambit-verify` reads a hash-chained JSONL ledger and checks it without the
