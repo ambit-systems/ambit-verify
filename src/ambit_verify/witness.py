@@ -59,6 +59,39 @@ def _walk_witness_ledger(
     return chain, best, equivocation_seq
 
 
+def _resolve_witnessed_head(
+    witness_path: Path,
+    verifier: HeadVerifier,
+    witnessed_ledger_id: str,
+    witness_ledger_attestation: HeadAttestation | None,
+) -> tuple[HeadAttestation | None, str | None]:
+    """Resolve the witness ledger's authenticated head witness, or the failure.
+
+    Verifies the witness ledger itself (its chain and its own head
+    attestation), then the highest-seq ``head_witness`` record it carries for
+    *witnessed_ledger_id*. Returns ``(witnessed, error)``; *witnessed* is
+    non-None exactly when *error* is None.
+    """
+    witness_chain, witnessed, equivocation_seq = _walk_witness_ledger(
+        witness_path, verifier, witnessed_ledger_id
+    )
+    if not witness_chain.ok:
+        return None, f"witness ledger invalid: {witness_chain.error}"
+    head_ok, head_error = _verify_head_attestation(
+        _attest_path(witness_path),
+        witness_chain,
+        verifier,
+        witness_ledger_attestation,
+    )
+    if not head_ok:
+        return None, f"witness ledger invalid: {head_error}"
+    if equivocation_seq is not None:
+        return None, f"witness equivocation at seq {equivocation_seq}"
+    if witnessed is None:
+        return None, f"no valid head witness found for {witnessed_ledger_id}"
+    return witnessed, None
+
+
 def verify_witnessed_head(
     ledger_path: str | Path,
     witness_ledger_path: str | Path,
@@ -102,23 +135,11 @@ def verify_witnessed_head(
     if not isinstance(witnessed_ledger_id, str) or not witnessed_ledger_id:
         return False, "witnessed_ledger_id must be non-empty"
 
-    witness_chain, witnessed, equivocation_seq = _walk_witness_ledger(
-        witness_path, verifier, witnessed_ledger_id
+    witnessed, error = _resolve_witnessed_head(
+        witness_path, verifier, witnessed_ledger_id, witness_ledger_attestation
     )
-    if not witness_chain.ok:
-        return False, f"witness ledger invalid: {witness_chain.error}"
-    head_ok, head_error = _verify_head_attestation(
-        _attest_path(witness_path),
-        witness_chain,
-        verifier,
-        witness_ledger_attestation,
-    )
-    if not head_ok:
-        return False, f"witness ledger invalid: {head_error}"
-    if equivocation_seq is not None:
-        return False, f"witness equivocation at seq {equivocation_seq}"
     if witnessed is None:
-        return False, f"no valid head witness found for {witnessed_ledger_id}"
+        return False, error
 
     chain = _chain if _chain is not None else _walk_ledger(resolved_ledger)
     if not chain.ok:
