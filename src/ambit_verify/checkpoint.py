@@ -55,6 +55,47 @@ class _Checkpoint:
     countersignature: str
 
 
+def _parse_checkpoint_witness_record(
+    record: object,
+) -> tuple[HeadAttestation | None, str | None, str | None]:
+    """Read and validate a checkpoint's ``witness_record`` field.
+
+    Returns ``(witness_attestation, witness_record_hash, error)``. The first
+    two are non-None exactly when *error* is None.
+    """
+    if not isinstance(record, Mapping):
+        return None, None, "checkpoint witness_record must be an object"
+    if record.get("record_type") != "head_witness":
+        return None, None, "checkpoint witness_record is not a head_witness record"
+    stored_hash = record.get("record_hash")
+    if not _is_digest(stored_hash):
+        return None, None, "checkpoint witness_record carries no record hash"
+    # The record hash covers every other field the witness record carries, so
+    # recomputing it here is what binds the witness attestation, the witnessed
+    # ledger id, and anything a witness added beside them.
+    unsigned = {key: value for key, value in record.items() if key != "record_hash"}
+    if hash_object(unsigned) != stored_hash:
+        return None, None, "checkpoint witness_record does not hash to its record_hash"
+    witness_block = record.get("attestation")
+    if not isinstance(witness_block, Mapping):
+        return None, None, "checkpoint witness_record carries no attestation"
+    witnessed_ledger_id = record.get("witnessed_ledger_id")
+    if not _is_non_empty_string(witnessed_ledger_id):
+        return (
+            None,
+            None,
+            "checkpoint witness_record witnessed_ledger_id must be a non-empty string",
+        )
+    if not _is_non_empty_string(witness_block.get("ledger_id")):
+        return None, None, "checkpoint witness attestation ledger_id must be a non-empty string"
+    witness_attestation = _attestation_from_block(witness_block)
+    if witness_attestation is None:
+        return None, None, "checkpoint witness attestation is malformed"
+    if witness_attestation.ledger_id != witnessed_ledger_id:
+        return None, None, "checkpoint witness attestation names another ledger"
+    return witness_attestation, stored_hash, None
+
+
 def _parse_checkpoint(checkpoint: Mapping[str, Any]) -> tuple[_Checkpoint | None, str | None]:
     """Read a checkpoint fail-closed. Returns ``(parsed, error)``."""
     unknown = set(checkpoint) - _CHECKPOINT_KEYS
@@ -80,36 +121,13 @@ def _parse_checkpoint(checkpoint: Mapping[str, Any]) -> tuple[_Checkpoint | None
     if attestation is None:
         return None, "checkpoint attestation is malformed"
 
-    record = checkpoint["witness_record"]
-    if not isinstance(record, Mapping):
-        return None, "checkpoint witness_record must be an object"
-    if record.get("record_type") != "head_witness":
-        return None, "checkpoint witness_record is not a head_witness record"
-    stored_hash = record.get("record_hash")
-    if not _is_digest(stored_hash):
-        return None, "checkpoint witness_record carries no record hash"
-    # The record hash covers every other field the witness record carries, so
-    # recomputing it here is what binds the witness attestation, the witnessed
-    # ledger id, and anything a witness added beside them.
-    unsigned = {key: value for key, value in record.items() if key != "record_hash"}
-    if hash_object(unsigned) != stored_hash:
-        return None, "checkpoint witness_record does not hash to its record_hash"
-    witness_block = record.get("attestation")
-    if not isinstance(witness_block, Mapping):
-        return None, "checkpoint witness_record carries no attestation"
-    witnessed_ledger_id = record.get("witnessed_ledger_id")
-    if not _is_non_empty_string(witnessed_ledger_id):
-        return (
-            None,
-            "checkpoint witness_record witnessed_ledger_id must be a non-empty string",
-        )
-    if not _is_non_empty_string(witness_block.get("ledger_id")):
-        return None, "checkpoint witness attestation ledger_id must be a non-empty string"
-    witness_attestation = _attestation_from_block(witness_block)
-    if witness_attestation is None:
-        return None, "checkpoint witness attestation is malformed"
-    if witness_attestation.ledger_id != witnessed_ledger_id:
-        return None, "checkpoint witness attestation names another ledger"
+    witness_attestation, witness_record_hash, witness_error = _parse_checkpoint_witness_record(
+        checkpoint["witness_record"]
+    )
+    if witness_error is not None:
+        return None, witness_error
+    assert witness_attestation is not None
+    assert witness_record_hash is not None
 
     countersignature = checkpoint["countersignature"]
     if not isinstance(countersignature, str) or not countersignature:
@@ -122,7 +140,7 @@ def _parse_checkpoint(checkpoint: Mapping[str, Any]) -> tuple[_Checkpoint | None
             attestation=attestation,
             attestation_hash=hash_object(attestation_block(attestation)),
             witness_attestation=witness_attestation,
-            witness_record_hash=stored_hash,
+            witness_record_hash=witness_record_hash,
             countersignature=countersignature,
         ),
         None,
