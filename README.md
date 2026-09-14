@@ -82,7 +82,7 @@ verifier described below.
 pip install ambit-verify
 ```
 
-Python 3.12 or later.
+Python 3.14 or later.
 
 ## Try it on the shipped sample
 

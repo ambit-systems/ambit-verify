@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Require Python 3.14.
+
 ### Added
 
 - Authenticate bounded behavioural snapshots against explicit observer/source
