@@ -289,6 +289,9 @@ def _walk_chain(
     prev_hash = GENESIS_HASH
     hash_at: str | None = None
 
+    def failed(reason: str) -> _Chain:
+        return _Chain(False, count, reason, prev_hash, hash_at)
+
     try:
         for file_path, line_no, text in _lines(
             files,
@@ -298,24 +301,12 @@ def _walk_chain(
         ):
             where = f"{_terminal_safe(file_path.name)}:{line_no}"
             if count >= MAX_LEDGER_RECORDS:
-                return _Chain(
-                    False,
-                    count,
-                    f"{where}: ledger exceeds {MAX_LEDGER_RECORDS} record limit",
-                    prev_hash,
-                    hash_at,
-                )
+                return failed(f"{where}: ledger exceeds {MAX_LEDGER_RECORDS} record limit")
             result = _check_record(text, count, prev_hash, where)
             if result.error is not None:
-                return _Chain(False, count, result.error, prev_hash, hash_at)
+                return failed(result.error)
             if result.record is None:
-                return _Chain(
-                    False,
-                    count,
-                    f"{where}: verified record unavailable",
-                    prev_hash,
-                    hash_at,
-                )
+                return failed(f"{where}: verified record unavailable")
             if record_visitor is not None:
                 record_visitor(result.record)
             prev_hash = result.record_hash
@@ -323,17 +314,11 @@ def _walk_chain(
             if count == want_seq:
                 hash_at = result.record_hash
     except _NotUtf8Error as exc:
-        return _Chain(
-            False,
-            count,
-            f"{_terminal_safe(exc.path.name)}: file is not UTF-8",
-            prev_hash,
-            hash_at,
-        )
+        return failed(f"{_terminal_safe(exc.path.name)}: file is not UTF-8")
     except _InputLimitError as exc:
         name = _terminal_safe(exc.path.name)
         where = name if exc.line_no is None else f"{name}:{exc.line_no}"
-        return _Chain(False, count, f"{where}: {exc.reason}", prev_hash, hash_at)
+        return failed(f"{where}: {exc.reason}")
     return _Chain(True, count, None, prev_hash, hash_at)
 
 
