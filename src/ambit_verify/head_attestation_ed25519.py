@@ -30,7 +30,7 @@ def _decode(signature: str) -> bytes | None:
         encoded = signature[len(_SIGNATURE_PREFIX) :].encode("ascii")
         # binascii.Error (malformed base64) subclasses ValueError.
         return base64.b64decode(encoded, validate=True)
-    except (UnicodeEncodeError, ValueError):
+    except UnicodeEncodeError, ValueError:
         return None
 
 

@@ -517,11 +517,11 @@ def read_attestation_file(path: str | Path) -> HeadAttestation | None:
         text = _read_utf8_document(resolved)
     except FileNotFoundError:
         return None
-    except (UnicodeDecodeError, _InputLimitError):
+    except UnicodeDecodeError, _InputLimitError:
         return None
     try:
         data = strict_json_loads(text)
-    except (ValueError, RecursionError):
+    except ValueError, RecursionError:
         return None
     if not isinstance(data, Mapping):
         return None
