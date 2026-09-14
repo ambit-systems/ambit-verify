@@ -147,6 +147,41 @@ def _parse_checkpoint(checkpoint: Mapping[str, Any]) -> tuple[_Checkpoint | None
     )
 
 
+def _check_checkpoint_signatures(
+    parsed: _Checkpoint,
+    *,
+    witness_verifier: HeadVerifier,
+    countersign_verifier: CheckpointVerifier,
+    authority_verifier: HeadVerifier | None,
+) -> str | None:
+    """Check a parsed checkpoint's cross-field identities and its three signatures."""
+    if parsed.attestation.ledger_id != parsed.witness_attestation.ledger_id:
+        return "checkpoint attestations name different ledgers"
+    if (
+        parsed.attestation.max_seq != parsed.seq
+        or parsed.attestation.head_record_hash != parsed.record_hash
+    ):
+        return "checkpoint attestation names another head"
+    if (
+        parsed.witness_attestation.max_seq != parsed.seq
+        or parsed.witness_attestation.head_record_hash != parsed.record_hash
+    ):
+        return "checkpoint witness record names another head"
+    if authority_verifier is not None and not authority_verifier.verify_head(parsed.attestation):
+        return "checkpoint attestation invalid (signature or trust root)"
+    if not witness_verifier.verify_head(parsed.witness_attestation):
+        return "checkpoint witness record invalid (signature or trust root)"
+    payload = checkpoint_payload(
+        seq=parsed.seq,
+        record_hash=parsed.record_hash,
+        attestation_hash=parsed.attestation_hash,
+        witness_record_hash=parsed.witness_record_hash,
+    )
+    if not countersign_verifier.verify_countersignature(payload, parsed.countersignature):
+        return "checkpoint countersignature invalid (signature or trust root)"
+    return None
+
+
 def verify_checkpoint(
     ledger_path: str | Path,
     checkpoint: Mapping[str, Any],
@@ -197,30 +232,14 @@ def verify_checkpoint(
     parsed, error = _parse_checkpoint(snapshot)
     if parsed is None:
         return False, error
-    if parsed.attestation.ledger_id != parsed.witness_attestation.ledger_id:
-        return False, "checkpoint attestations name different ledgers"
-    if (
-        parsed.attestation.max_seq != parsed.seq
-        or parsed.attestation.head_record_hash != parsed.record_hash
-    ):
-        return False, "checkpoint attestation names another head"
-    if (
-        parsed.witness_attestation.max_seq != parsed.seq
-        or parsed.witness_attestation.head_record_hash != parsed.record_hash
-    ):
-        return False, "checkpoint witness record names another head"
-    if authority_verifier is not None and not authority_verifier.verify_head(parsed.attestation):
-        return False, "checkpoint attestation invalid (signature or trust root)"
-    if not witness_verifier.verify_head(parsed.witness_attestation):
-        return False, "checkpoint witness record invalid (signature or trust root)"
-    payload = checkpoint_payload(
-        seq=parsed.seq,
-        record_hash=parsed.record_hash,
-        attestation_hash=parsed.attestation_hash,
-        witness_record_hash=parsed.witness_record_hash,
+    signature_error = _check_checkpoint_signatures(
+        parsed,
+        witness_verifier=witness_verifier,
+        countersign_verifier=countersign_verifier,
+        authority_verifier=authority_verifier,
     )
-    if not countersign_verifier.verify_countersignature(payload, parsed.countersignature):
-        return False, "checkpoint countersignature invalid (signature or trust root)"
+    if signature_error is not None:
+        return False, signature_error
 
     chain = (
         _chain
