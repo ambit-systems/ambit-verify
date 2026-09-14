@@ -37,7 +37,7 @@ def _assert_installer_identities(content: str, *, matrix: bool) -> None:
         assert json.loads(platforms.group(1)) == list(_UV_CHECKSUMS)
         versions = re.search(r"^ {8}python-version: (\[[^\n]+\])$", content, re.MULTILINE)
         assert versions is not None
-        assert json.loads(versions.group(1)) == ["3.12", "3.13", "3.14"]
+        assert json.loads(versions.group(1)) == ["3.14"]
         entries = _MATRIX_ENTRY.findall(content)
         assert len(entries) == len(_UV_CHECKSUMS)
         assert dict(entries) == _UV_CHECKSUMS
@@ -78,7 +78,7 @@ def test_every_uv_installer_has_a_reviewed_platform_content_identity() -> None:
         (_UV_CHECKSUMS["macos-latest"], _UV_CHECKSUMS["ubuntu-latest"]),
         (_UV_CHECKSUMS["ubuntu-latest"], _UV_CHECKSUMS["macos-latest"]),
         ("macos-latest", "windows-latest"),
-        ('["3.12", "3.13", "3.14"]', '["3.12", "3.14"]'),
+        ('["3.14"]', '["3.13"]'),
         (_MATRIX_CHECKSUM, _UV_CHECKSUMS["ubuntu-latest"]),
         (_UV_VERSION, "0.9.11"),
         (_UV_CHECKSUMS["macos-latest"], ""),

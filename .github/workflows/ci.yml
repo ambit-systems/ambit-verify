@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         os: ["ubuntu-latest", "macos-latest"]
-        python-version: ["3.12", "3.13", "3.14"]
+        python-version: ["3.14"]
         include:
           # uv 0.9.10 archives verified against upstream release bytes.
           - os: "ubuntu-latest"

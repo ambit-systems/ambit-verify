@@ -24,7 +24,7 @@ jobs:
         with:
           version: "0.9.10"
           checksum: "440c4215b171e64061d65d16a23753dd25c29a7f7b1b0446c9e9aed0fa372f27"
-          python-version: "3.12"
+          python-version: "3.14"
         env:
           RUNNER_TOOL_CACHE: "${{ runner.temp }}/ambit-uv-tool-cache"
 
