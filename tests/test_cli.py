@@ -50,6 +50,47 @@ def test_bare_chain_pass(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> 
     assert _run(capsys, path) == (0, "PASS count=4\n", "")
 
 
+def test_execution_command_uses_only_independent_trust_inputs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fixture = Path(__file__).with_name("fixtures") / "controlled_lifecycle_v6"
+    bundle = fixture / "execution-bundle.json"
+    trust = json.loads((fixture / "caller-trust.json").read_text(encoding="utf-8"))
+    admission_roots = tmp_path / "admission-roots.json"
+    registration_roots = tmp_path / "registration-roots.json"
+    expected_head = tmp_path / "head.json"
+    admission_roots.write_text(
+        json.dumps(trust["admission_trust_roots_by_adapter"]), encoding="utf-8"
+    )
+    registration_roots.write_text(
+        json.dumps(trust["enforcement_point_registration_public_keys"]), encoding="utf-8"
+    )
+    expected_head.write_text(json.dumps(trust["expected_head"]), encoding="utf-8")
+
+    code, out, err = _run(
+        capsys,
+        "execution",
+        bundle,
+        "--admission-roots",
+        admission_roots,
+        "--registration-roots",
+        registration_roots,
+        "--head",
+        expected_head,
+        "--domain",
+        trust["expected_domain"],
+        "--ledger-id",
+        trust["expected_ledger_id"],
+        "--operation-id",
+        trust["operation_id"],
+    )
+
+    report = json.loads(out)
+    assert code == 0 and err == ""
+    assert report["valid"] is True
+    assert set(report["checks"].values()) == {"valid"}
+
+
 def test_bare_chain_fail(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     path = filled(tmp_path / "ledger.jsonl", 3)
     lines = path.read_text(encoding="utf-8").splitlines()

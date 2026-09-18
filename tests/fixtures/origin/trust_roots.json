@@ -1,0 +1,1 @@
+{"delegation-root": {"public_key": "db995fe25169d141cab9bbba92baa01f9f2e1ece7df4cb2ac05190f37fcc1f9d", "scheme": "ed25519"}, "issuer-root": {"public_key": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12", "scheme": "ed25519"}, "ratifier-root": {"public_key": "22fc297792f0b6ffc0bfcfdb7edb0c0aa14e025a365ec0e342e86e3829cb74b6", "scheme": "ed25519"}}

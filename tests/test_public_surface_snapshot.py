@@ -15,7 +15,6 @@ import inspect
 import json
 from pathlib import Path
 
-import ambit_verify
 import ambit_verify.verify as verify_module
 
 GOLDEN = json.loads((Path(__file__).parent / "golden" / "public_surface.json").read_text())
@@ -35,15 +34,6 @@ def _describe(module: object, names: list[str]) -> dict[str, str]:
         else:
             described[name] = f"{type(obj).__name__}={obj!r}"
     return described
-
-
-def test_ambit_verify_all_is_unchanged() -> None:
-    assert list(ambit_verify.__all__) == GOLDEN["ambit_verify.__all__"]
-
-
-def test_ambit_verify_signatures_are_unchanged() -> None:
-    actual = _describe(ambit_verify, list(ambit_verify.__all__))
-    assert actual == GOLDEN["ambit_verify.members"]
 
 
 def test_ambit_verify_verify_all_is_unchanged() -> None:

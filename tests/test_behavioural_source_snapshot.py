@@ -2,11 +2,11 @@
 
 import pytest
 
+import test_behavioural
 from ambit_verify import behavioural
 from ambit_verify.behavioural import BehaviouralVerificationError
-from test_behavioural import signed
 
-pytest_plugins = ["test_behavioural"]
+case = test_behavioural.case
 
 
 def test_mutation_after_hash_check_cannot_substitute_source_actor(case, monkeypatch):
@@ -26,4 +26,4 @@ def test_mutation_after_hash_check_cannot_substitute_source_actor(case, monkeypa
 
     monkeypatch.setattr(behavioural, "_check_record", check_then_replace)
     with pytest.raises(BehaviouralVerificationError, match="source observation count mismatch"):
-        behavioural.verify_behavioural_snapshot(signed(payload, key), **trust)
+        behavioural.verify_behavioural_snapshot(test_behavioural.signed(payload, key), **trust)

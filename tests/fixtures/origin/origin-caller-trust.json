@@ -1,0 +1,31 @@
+{
+  "admission_trust_roots": {
+    "lab-custodian": {
+      "scheme": "ed25519",
+      "public_key": "7e7b5249f6c19ea9a1454baa70142d4be0aebb8133af7b7a12b7dad290ea7ac8"
+    }
+  },
+  "credential_trust_roots": {
+    "delegation-root": {
+      "scheme": "ed25519",
+      "public_key": "db995fe25169d141cab9bbba92baa01f9f2e1ece7df4cb2ac05190f37fcc1f9d"
+    },
+    "issuer-root": {
+      "scheme": "ed25519",
+      "public_key": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12"
+    },
+    "ratifier-root": {
+      "scheme": "ed25519",
+      "public_key": "22fc297792f0b6ffc0bfcfdb7edb0c0aa14e025a365ec0e342e86e3829cb74b6"
+    }
+  },
+  "credential_registration_public_keys": {
+    "org-enrolment-1": "ee93a4f66f8d16b819bb9beb9ffccdfcdc1412e87fee6a324c2a99a1e0e67148"
+  },
+  "revocation_attestation_public_keys": {
+    "revocation-root": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48"
+  },
+  "cumulative_attestation_public_keys": {
+    "lab-cumulative": "a98393bd76a3d711e188586647a1d264475e47fda4ad07950b61096e86eb7809"
+  }
+}

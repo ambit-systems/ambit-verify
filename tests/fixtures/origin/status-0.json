@@ -1,0 +1,1 @@
+{"attestation": "ed25519:kbA6Z9UA5fTAu4hTD0N57t+jfzBpAcWiCAVcn7V4VW0/XbC1iTYAUucLeSVrTzRAQw4F5Kt7ZDR2WOEn9onkAw==", "checked_at": "2026-09-16T10:31:57.687Z", "freshness_bound_ms": 600000, "is_revoked": false, "jti": "ratifier-leaf", "revocation_epoch": 0, "source": "sqlite", "trust_root_id": "revocation-root", "verifiable": true}

@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from datetime import UTC, datetime
 from typing import Any
 
 MAX_JSON_NESTING = 64
@@ -124,4 +125,36 @@ def hash_object(obj: Any) -> str:
     return hashlib.sha256(canonical_json_bytes(obj)).hexdigest()
 
 
-__all__ = ["canonical_json_bytes", "hash_object"]
+def parse_nonnegative_amount_scaled(value: object) -> int | None:
+    """Parse ``0|[1-9][0-9]*`` exactly, without coercing another JSON type."""
+    if (
+        not isinstance(value, str)
+        or not value.isascii()
+        or not value.isdecimal()
+        or (len(value) > 1 and value.startswith("0"))
+    ):
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        # Respect Python's configured integer-string conversion bound.
+        return None
+
+
+def canonical_iso(dt: datetime) -> str:
+    """Format *dt* as canonical UTC ISO-8601 with ``Z`` suffix and millisecond precision."""
+    return dt.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def sha256_hex(data: bytes) -> str:
+    """Return SHA-256 digest hex for *data* bytes."""
+    return hashlib.sha256(data).hexdigest()
+
+
+__all__ = [
+    "canonical_iso",
+    "canonical_json_bytes",
+    "hash_object",
+    "parse_nonnegative_amount_scaled",
+    "sha256_hex",
+]

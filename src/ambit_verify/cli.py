@@ -14,8 +14,10 @@ ids) are raised by the parser before any verification runs.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -284,6 +286,131 @@ def _verify(args: argparse.Namespace) -> int:
     return count
 
 
+def _credential_command(argv: Sequence[str]) -> int:
+    """Check public retained artifacts against independently supplied roots."""
+    command = argv[0]
+    parser = _TerminalSafeArgumentParser(prog=f"ambit-verify {command}")
+    parser.add_argument("artifact", type=Path)
+    if command == "execution":
+        parser.add_argument("--admission-roots", type=Path, required=True)
+        parser.add_argument("--registration-roots", type=Path, required=True)
+        parser.add_argument("--head", type=Path, required=True)
+        parser.add_argument("--domain", required=True, type=_non_empty)
+        parser.add_argument("--ledger-id", required=True, type=_non_empty)
+        parser.add_argument("--operation-id", required=True, type=_non_empty)
+    else:
+        parser.add_argument("--trust", type=Path, required=True)
+        if command == "admission":
+            parser.add_argument("--domain", required=True, type=_non_empty)
+            parser.add_argument("--ledger-id", required=True, type=_non_empty)
+            parser.add_argument("--at", required=True, help="timezone-aware comparison timestamp")
+            parser.add_argument("--minimum-version", type=int, default=1)
+            parser.add_argument("--previous-hash")
+    args = parser.parse_args(argv[1:])
+    try:
+        if command == "execution":
+            from .execution_evidence import verify_execution_bundle
+
+            bundle = strict_json_loads(_read_utf8_document(args.artifact))
+            admission_roots = strict_json_loads(_read_utf8_document(args.admission_roots))
+            registration_roots = strict_json_loads(_read_utf8_document(args.registration_roots))
+            expected_head = strict_json_loads(_read_utf8_document(args.head))
+            if not (
+                isinstance(bundle, Mapping)
+                and isinstance(admission_roots, Mapping)
+                and isinstance(registration_roots, Mapping)
+                and isinstance(expected_head, Mapping)
+            ):
+                raise ValueError("execution bundle, roots, and head must be JSON objects")
+            execution_result = verify_execution_bundle(
+                bundle,
+                admission_trust_roots_by_adapter=admission_roots,
+                enforcement_point_registration_public_keys=registration_roots,
+                expected_domain=args.domain,
+                expected_ledger_id=args.ledger_id,
+                expected_head=expected_head,
+                operation_id=args.operation_id,
+            )
+            report: dict[str, Any] = {
+                "profile": "canonical_operation",
+                "valid": execution_result.valid,
+                "checks": dict(sorted(execution_result.checks.items())),
+                "errors": list(execution_result.errors),
+                "limits": [
+                    "does not trust bundled roots and establishes only the caller-pinned prefix"
+                ],
+            }
+        else:
+            trust = strict_json_loads(_read_utf8_document(args.trust))
+            if not isinstance(trust, Mapping):
+                raise ValueError("trust document must be an object")
+            if command == "admission":
+                from .admission import verify_authority_admission
+
+                roots = trust.get("admission_trust_roots")
+                if not isinstance(roots, Mapping):
+                    raise ValueError("trust document lacks admission_trust_roots")
+                result = verify_authority_admission(
+                    _read_utf8_document(args.artifact).strip(),
+                    admission_trust_roots=roots,
+                    expected_domain=args.domain,
+                    expected_ledger_id=args.ledger_id,
+                    at=datetime.fromisoformat(args.at.replace("Z", "+00:00")),
+                    minimum_version=args.minimum_version,
+                    expected_previous_hash=args.previous_hash,
+                )
+                report = {
+                    "profile": "signed_authority_admission",
+                    "valid": result.valid,
+                    "errors": list(result.errors),
+                    "admission_hash": result.admission.admission_hash if result.admission else None,
+                    "version": result.admission.version if result.admission else None,
+                    "limits": [
+                        "does not verify execution, current revocation, "
+                        "or committed resource effects"
+                    ],
+                }
+            else:
+                from .ratification_bundle import GRANT_FILE, verify_ratification_bundle
+
+                credential_roots = trust.get("credential_trust_roots")
+                revocation_roots = trust.get("revocation_attestation_public_keys")
+                enrollment_roots = trust.get("credential_registration_public_keys")
+                if not isinstance(credential_roots, Mapping) or not isinstance(
+                    revocation_roots, Mapping
+                ):
+                    raise ValueError("trust document lacks credential or revocation roots")
+                if enrollment_roots is not None and not isinstance(enrollment_roots, Mapping):
+                    raise ValueError("credential_registration_public_keys must be an object")
+                bundle = verify_ratification_bundle(
+                    args.artifact,
+                    trust_roots=credential_roots,
+                    revocation_trust_roots=revocation_roots,
+                    registration_public_keys=enrollment_roots,
+                )
+                report = {
+                    "profile": "issued_grant"
+                    if (args.artifact / GRANT_FILE).exists()
+                    else "ratification",
+                    "valid": bundle.ok,
+                    "checks": {
+                        name: {"valid": check.ok, "reason": check.reason}
+                        for name, check in bundle.checks
+                    },
+                    "errors": bundle.failures,
+                    "limits": [
+                        "does not establish independently admitted origin or actual execution"
+                    ],
+                }
+    except OSError as exc:
+        print(f"ambit-verify: error: {_terminal_safe(exc)}", file=sys.stderr)
+        return 2
+    except (_InputLimitError, ValueError, RecursionError) as exc:
+        report = {"profile": command, "valid": False, "errors": [_terminal_safe(exc)]}
+    print(json.dumps(report, sort_keys=True, ensure_ascii=True, allow_nan=False))
+    return 0 if report["valid"] else 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the ``ambit-verify`` command.
 
@@ -299,8 +426,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         SystemExit: With code 2 on a usage error, raised by the parser before
             any verification runs.
     """
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] in {"admission", "ratification", "execution"}:
+        return _credential_command(arguments)
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(arguments)
     _check_flags(parser, args)
     try:
         count = _verify(args)

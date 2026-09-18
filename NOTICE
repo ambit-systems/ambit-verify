@@ -15,3 +15,9 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
+This package includes Ambit-owned verification-only routines extracted
+from ambit-authority-core and licensed here under Apache-2.0 with the
+copyright holder's approval. This notice does not alter the licence of
+the separate ambit-authority-core package or include its evaluation,
+issuance, signing, or private-key implementations.

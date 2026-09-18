@@ -1,0 +1,20 @@
+{
+  "admission_trust_roots_by_adapter": {
+    "http": {
+      "sandbox-live-admission-root": {
+        "scheme": "ed25519",
+        "public_key": "be9281c119f1e1c38d753d9f706565e9c0c65a8260e914c46b7b0131d045eaa2"
+      }
+    }
+  },
+  "enforcement_point_registration_public_keys": {
+    "sandbox-registration-root": "741885a5a93799842d28413607606084c1599a79c3c6c843072c4e140eccd162"
+  },
+  "expected_domain": "sandbox-live",
+  "expected_ledger_id": "sandbox",
+  "expected_head": {
+    "seq": 7,
+    "record_hash": "555a420bd39acf1f31770ec091f1c56c961718fe238fc2f55ebed355b6b2c1f0"
+  },
+  "operation_id": "controlled-lifecycle-smoke-once"
+}

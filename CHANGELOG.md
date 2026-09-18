@@ -10,6 +10,29 @@ follows [Semantic Versioning](https://semver.org/).
 
 - Require Python 3.14.
 
+- Add complete canonical-operation bundle verification with caller-pinned head,
+  enforcement-point registration keys, and per-adapter admission-root maps.
+  The bundle API refuses unknown adapters and never flattens adapter-specific
+  outside trust. Per-receipt admission verification continues to use one
+  selected admission-root map.
+
+- Expose caller-pinned canonical-operation verification through
+  `ambit-verify execution`; independent admission roots, registration roots,
+  and head are required inputs and the JSON report preserves per-check
+  `valid`/`failed`/`not_established` states.
+
+- Treat a signed `not_executed` terminal outcome as authenticated release
+  evidence rather than an effect claim. Bundle `valid` is reserved for complete
+  committed-effect evidence; unresolved operations and signed releases retain
+  their successful applicable checks without being relabelled as effects.
+
+### Fixed
+
+- Verify Git-publication execution evidence against the exact admitted remote,
+  agent ref, non-forced old..new plan, native `git_push` quantity, and matching
+  signed outcome. Approval evidence now binds the retained escalation and its
+  canonical request fingerprint before a complete effect can verify.
+
 ### Added
 
 - Authenticate bounded behavioural snapshots against explicit observer/source
@@ -21,6 +44,10 @@ follows [Semantic Versioning](https://semver.org/).
 
 - Retain the parsed record that passed the source hash check. A later mutation
   of the caller's source object cannot substitute another actor's observation.
+
+- Reject noncanonical, duplicate-key, malformed, and over-deep signed slip
+  payloads; require independently countersigned, P-256 workload enrolment for
+  every retained actor proof.
 
 - Reject duplicate-key, non-finite, unpaired-surrogate, overflowing, over-deep,
   oversized, and over-count JSON evidence through terminal-safe controlled failures.

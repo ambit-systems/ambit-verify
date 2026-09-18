@@ -76,6 +76,74 @@ The `ambit-cli` package exposes this API as `ambit receipts verify`,
 `ambit-verify` command remains the smaller chain, head, witness, and checkpoint
 verifier described below.
 
+## Verify a retained canonical operation
+
+`verify_execution_bundle` verifies one complete, caller-pinned canonical
+operation prefix using public material only. It is for a **committed effect**
+claim: it checks the selected operation's retained authority, canonical
+prefix/accounting, registered enforcement point, signed dispatch, and signed
+resource outcome before it reports `valid`.
+
+```python
+from ambit_verify import verify_execution_bundle
+
+result = verify_execution_bundle(
+    bundle,
+    admission_trust_roots_by_adapter={
+        "http": {"admission-root": {"scheme": "ed25519", "public_key": "..."}},
+        "mcp": {"other-admission-root": {"scheme": "ed25519", "public_key": "..."}},
+    },
+    enforcement_point_registration_public_keys={"registration-root": "..."},
+    expected_domain="customer-domain",
+    expected_ledger_id="customer-ledger",
+    expected_head={"seq": 42, "record_hash": "..."},
+    operation_id="operation-123",
+)
+```
+
+`admission_trust_roots_by_adapter` is an outside trust input. Each retained
+operation selects exactly the roots for its authenticated adapter; roots are
+never flattened or chosen from retained evidence, and an unknown adapter
+refuses. The separately exposed per-receipt
+`verify_execution_authority` API continues to take one already-selected,
+singular `admission_trust_roots` map.
+
+Each check is an explicit three-state string: `valid`, `failed`, or
+`not_established`. A malformed or contradictory retained artifact makes the
+check that attempted to verify it `failed`; absent or unresolved future-phase
+evidence leaves that claim `not_established`, with an explanatory error.
+Dependent checks remain `not_established`. `valid` means every one of the
+nine checks is `valid`. A signed `not_executed` terminal outcome authenticates
+a release but does not establish an effect: `resource_outcome` is `valid`,
+`record_effect` is `not_established`, and aggregate `valid` is false.
+
+The same verifier is available at the command line. Every trust input is a
+separate caller-owned document; bundled roots are never adopted:
+
+```console
+ambit-verify execution BUNDLE.json \
+  --admission-roots ADMISSION_ROOTS.json \
+  --registration-roots REGISTRATION_ROOTS.json \
+  --head PINNED_HEAD.json \
+  --domain customer-domain --ledger-id customer-ledger --operation-id operation-123
+```
+
+It emits one JSON report whose `checks` values use the same three-state
+contract as the library.
+
+The nine checks remain separate claims: canonical prefix, prefix accounting,
+enforcement-point registration, head attestation, authority, accounting,
+dispatch, resource outcome, and recorded effect. A passing applicable check
+does not imply another check, and only all of them make `valid` true. The
+caller-pinned `expected_head` proves the supplied prefix ends at that head; it
+does not establish unseen global history, a later head, or freshness.
+
+This verifier does not establish independently operated humans, independent
+human custody, malicious-host effect prevention, bank settlement, global
+history completeness, or the ordinary-audit scenario. A controlled record
+receiver is not a bank. It verifies the bounded retained evidence and
+caller-pinned public trust supplied to it.
+
 ## Install
 
 ```

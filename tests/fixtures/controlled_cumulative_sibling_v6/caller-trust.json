@@ -1,0 +1,20 @@
+{
+  "admission_trust_roots_by_adapter": {
+    "http": {
+      "slice-admission": {
+        "public_key": "91ecd577595b7c83463f1019e2000a4cf70f96858a1a74f25aeb55cca2ba573e",
+        "scheme": "ed25519"
+      }
+    }
+  },
+  "expected_domain": "http",
+  "expected_ledger_id": "slice",
+  "expected_head": {
+    "seq": 21,
+    "record_hash": "930deaa7b3afa8b7a75e2a078f533710401aa1b4d02186f3b407a4532a85f075"
+  },
+  "operation_id": "phase5-sibling-a",
+  "enforcement_point_registration_public_keys": {
+    "slice-registrar": "4bdc7995aaf2b27082c9eeaacbbf17d2e690a9daa16be96225ae8432a4a4c5f2"
+  }
+}
