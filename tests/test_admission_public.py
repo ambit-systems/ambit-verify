@@ -10,6 +10,7 @@ import hashlib
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from ambit_verify import (
@@ -153,6 +154,40 @@ def test_admission_uses_independent_roots_and_checks_version_predecessor() -> No
         at=NOW,
         expected_previous_hash="cc" * 32,
     ).valid
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("origin_grant_hashes", []),
+        ("version", 0),
+        ("credential_trust_roots", {}),
+        ("max_actor_proof_age_seconds", -1),
+        ("exp", "not-a-time"),
+        ("exp", "2027-01-01T00:00:00"),
+        ("nbf", "2028-01-01T00:00:00Z"),
+    ],
+)
+def test_public_verifier_refuses_signed_malformed_admission_claims(field: str, value: Any) -> None:
+    signer = Ed25519PrivateKey.generate()
+    claims = _admission_claims(origin_hash="aa" * 32)
+    claims[field] = value
+    roots = {
+        "admission": {
+            "scheme": "ed25519",
+            "public_key": signer.public_key().public_bytes_raw().hex(),
+        }
+    }
+    token = _slip(claims, signer, trust_root_id="admission", context=ADMISSION_CONTEXT)
+
+    result = verify_authority_admission(
+        token,
+        admission_trust_roots=roots,
+        expected_domain="customer-domain",
+        expected_ledger_id="ledger",
+        at=NOW,
+    )
+    assert not result.valid
 
 
 def test_origin_requires_exact_enforcement_point_audience() -> None:

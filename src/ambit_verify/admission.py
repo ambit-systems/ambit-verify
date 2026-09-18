@@ -129,11 +129,12 @@ def _moment(value: Any) -> datetime:
 def _shape_errors(claims: Mapping[str, Any]) -> list[str]:
     errors: list[str] = []
     version = claims.get("schema_version")
-    if (
-        not isinstance(version, int)
-        or isinstance(version, bool)
-        or version not in SUPPORTED_ADMISSION_SCHEMA_VERSIONS
-    ):
+    valid_schema_version = (
+        isinstance(version, int)
+        and not isinstance(version, bool)
+        and version in SUPPORTED_ADMISSION_SCHEMA_VERSIONS
+    )
+    if not valid_schema_version:
         errors.append("unsupported admission schema version")
     if set(claims) != _FIELDS:
         errors.append(f"admission fields do not match schema version {version!r}")
@@ -181,7 +182,7 @@ def _shape_errors(claims: Mapping[str, Any]) -> list[str]:
                 errors.append(f"admission {name} requires Ed25519 public keys")
     binding = claims.get("resource_binding")
     binding_fields = {"adapter_id", "downstream_url", "downstream_path", "receipt_public_key"}
-    if version in {2, ADMISSION_SCHEMA_VERSION}:
+    if valid_schema_version and version in {2, ADMISSION_SCHEMA_VERSION}:
         binding_fields |= {"outcome_profile", "outcome_public_key"}
     if (
         version == ADMISSION_SCHEMA_VERSION
@@ -197,7 +198,7 @@ def _shape_errors(claims: Mapping[str, Any]) -> list[str]:
                 errors.append(f"admission resource binding {name} is invalid")
         if not _digest(binding["receipt_public_key"]):
             errors.append("admission resource receipt public key is invalid")
-        if version in {2, ADMISSION_SCHEMA_VERSION}:
+        if valid_schema_version and version in {2, ADMISSION_SCHEMA_VERSION}:
             outcome_profile = binding["outcome_profile"]
             outcome_public_key = binding["outcome_public_key"]
             if not (
@@ -209,16 +210,29 @@ def _shape_errors(claims: Mapping[str, Any]) -> list[str]:
                 )
             ):
                 errors.append("admission resource outcome attestation pair is invalid")
-            if outcome_profile == "git-publication/1":
-                try:
-                    if version != ADMISSION_SCHEMA_VERSION:
-                        raise ValueError("Git binding requires the current admission schema")
+            try:
+                if valid_schema_version and version in {2, ADMISSION_SCHEMA_VERSION}:
                     resource_binding_hash(binding)
-                except TypeError, ValueError:
-                    errors.append("admission Git resource binding is invalid")
-            elif version == ADMISSION_SCHEMA_VERSION:
+            except TypeError, ValueError:
+                errors.append("admission resource binding is invalid")
+            if outcome_profile == "git-publication/1" and version != ADMISSION_SCHEMA_VERSION:
+                errors.append("admission Git resource binding is invalid")
+            elif version == ADMISSION_SCHEMA_VERSION and outcome_profile != "git-publication/1":
                 errors.append("admission schema3 requires the Git publication profile")
     return errors
+
+
+def validate_authority_admission_claims(
+    claims: Mapping[str, Any],
+) -> tuple[datetime, datetime]:
+    """Validate signature-independent admission claims and return their UTC interval."""
+    errors = _shape_errors(claims)
+    if errors:
+        raise ValueError("; ".join(errors))
+    nbf, exp = _moment(claims["nbf"]), _moment(claims["exp"])
+    if nbf > exp:
+        raise ValueError("admission validity interval is inverted")
+    return nbf, exp
 
 
 def verify_authority_admission(
@@ -270,12 +284,10 @@ def verify_authority_admission(
         return AdmissionVerification(
             False, None, ("admission signature does not verify under caller trust",)
         )
-    errors = _shape_errors(claims)
-    if errors:
-        return AdmissionVerification(False, None, tuple(errors))
+    errors: list[str] = []
     try:
-        nbf, exp = _moment(claims["nbf"]), _moment(claims["exp"])
-        if nbf > exp or not nbf <= at <= exp:
+        nbf, exp = validate_authority_admission_claims(claims)
+        if not nbf <= at <= exp:
             errors.append("admission does not cover the comparison time")
         if claims["domain_id"] != expected_domain or claims["ledger_id"] != expected_ledger_id:
             errors.append("admission domain or ledger differs from caller expectation")

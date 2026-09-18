@@ -37,6 +37,10 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Expose `validate_authority_admission_claims` for signature-independent schema
+  and validity-interval validation. It returns UTC `(nbf, exp)` values and is
+  shared with the private admission producer; signature, caller-time, domain,
+  ledger, and rollback checks remain in `verify_authority_admission`.
 - Authenticate bounded behavioural snapshots against explicit observer/source
   keys, actor/domain/audience, model configuration and evaluation time. Retained
   source verification checks the full chain against its signed head; it does
