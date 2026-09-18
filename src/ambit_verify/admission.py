@@ -692,6 +692,7 @@ def _verify_revocation_status(
 ) -> str | None:
     if not isinstance(raw, Mapping):
         return f"required revocation status for {jti} is missing"
+    freshness_evaluated_at_raw = raw.get("freshness_evaluated_at")
     status_evidence = {
         name: value for name, value in raw.items() if name != "freshness_evaluated_at"
     }
@@ -715,7 +716,19 @@ def _verify_revocation_status(
         admission_age_limit_ms,
         grant_age_limit_ms if grant_age_limit_ms is not None else admission_age_limit_ms,
     )
-    if not status.checked_at <= at <= status.checked_at + timedelta(milliseconds=bound):
+    bound_delta = timedelta(milliseconds=bound)
+    if freshness_evaluated_at_raw is None:
+        comparison_time = at
+    else:
+        try:
+            comparison_time = _moment(freshness_evaluated_at_raw)
+        except TypeError, ValueError:
+            return f"revocation status freshness_evaluated_at for {jti} is invalid"
+    if comparison_time < at - bound_delta:
+        return f"revocation status for {jti} was evaluated before the sealed decision instant"
+    if comparison_time > at + bound_delta:
+        return f"revocation status for {jti} does not cover the retained comparison time"
+    if not status.checked_at <= comparison_time <= status.checked_at + bound_delta:
         return f"revocation status for {jti} does not cover the retained comparison time"
     if status.revocation_epoch is None or status.revocation_epoch < epoch_floor:
         return f"revocation status for {jti} is below the required epoch floor"
@@ -787,11 +800,21 @@ def _verify_cumulative_rows(
             return f"cumulative status row {index} has an invalid checked_at"
         if not isinstance(freshness, int) or isinstance(freshness, bool) or freshness < 0:
             return f"cumulative status row {index} has no usable freshness bound"
-        if (
-            not checked_at
-            <= at
-            <= checked_at + timedelta(milliseconds=min(freshness, age_limit_ms))
-        ):
+        bound = min(freshness, age_limit_ms)
+        bound_delta = timedelta(milliseconds=bound)
+        freshness_evaluated_at_raw = row.get("freshness_evaluated_at")
+        if freshness_evaluated_at_raw is None:
+            comparison_time = at
+        else:
+            try:
+                comparison_time = _moment(freshness_evaluated_at_raw)
+            except TypeError, ValueError:
+                return f"cumulative status row {index} has an invalid freshness_evaluated_at"
+        if comparison_time < at - bound_delta:
+            return f"cumulative status row {index} was evaluated before the sealed decision instant"
+        if comparison_time > at + bound_delta:
+            return f"cumulative status row {index} does not cover the retained comparison time"
+        if not checked_at <= comparison_time <= checked_at + bound_delta:
             return f"cumulative status row {index} does not cover the retained comparison time"
     return None
 
