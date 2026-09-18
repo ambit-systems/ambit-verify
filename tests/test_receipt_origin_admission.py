@@ -50,9 +50,7 @@ def test_v6_receipt_with_correct_roots_establishes_origin() -> None:
 
 def test_v6_receipt_with_wrong_roots_fails_origin_admission() -> None:
     roots = _v6_admission_roots()
-    wrong_roots = {
-        root_id: {**root, "public_key": "00" * 32} for root_id, root in roots.items()
-    }
+    wrong_roots = {root_id: {**root, "public_key": "00" * 32} for root_id, root in roots.items()}
     result = _check(_v6_receipt(), admission_trust_roots=wrong_roots)
     assert result.origin_admission == "failed"
     assert not result.valid

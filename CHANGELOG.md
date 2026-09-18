@@ -8,6 +8,8 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `verify_receipt_credentials` returns `origin_admission` (`not_established`, `valid` or `failed`) and accepts `admission_trust_roots`; a `valid` chain result does not establish origin unless `origin_admission` is `valid`.
+- Cache admitted-origin verification per origin token, admission hash and artifact bytes, so repeated live checks of one origin do not re-verify its ratification bundle.
 - Require Python 3.14.
 
 - Add complete canonical-operation bundle verification with caller-pinned head,

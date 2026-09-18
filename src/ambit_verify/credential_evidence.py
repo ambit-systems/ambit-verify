@@ -407,13 +407,25 @@ def _origin_admission(
     from .admission import verify_authority_admission
 
     admission_evidence = _mapping(evidence.get("authority_admission"))
+    artifact = admission_evidence.get("artifact")
+    domain_id = admission_evidence.get("domain_id")
+    ledger_id = admission_evidence.get("ledger_id")
+    minimum_version = admission_evidence.get("minimum_version")
+    if (
+        not isinstance(artifact, str)
+        or not isinstance(domain_id, str)
+        or not isinstance(ledger_id, str)
+        or not isinstance(minimum_version, int)
+    ):
+        errors.append("origin admission did not verify: malformed retained admission evidence")
+        return "failed"
     result = verify_authority_admission(
-        admission_evidence.get("artifact"),
+        artifact,
         admission_trust_roots=admission_trust_roots,
-        expected_domain=admission_evidence.get("domain_id"),
-        expected_ledger_id=admission_evidence.get("ledger_id"),
+        expected_domain=domain_id,
+        expected_ledger_id=ledger_id,
         at=evaluated_at,
-        minimum_version=admission_evidence.get("minimum_version"),
+        minimum_version=minimum_version,
         expected_previous_hash=admission_evidence.get("expected_previous_hash"),
     )
     if not result.valid or result.admission is None:
