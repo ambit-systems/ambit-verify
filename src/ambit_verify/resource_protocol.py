@@ -17,6 +17,7 @@ from .hashing import canonical_json_bytes, hash_object, strict_json_loads
 
 RESOURCE_PROFILE = "record-egress/1"
 GIT_PUBLICATION_PROFILE = "git-publication/1"
+CUSTOMER_DELETE_PROFILE = "customer-delete/1"
 DISPATCH_CONTEXT = b"ambit.resource.dispatch.v1."
 OUTCOME_CONTEXT = b"ambit.resource.outcome.v1."
 RECONCILIATION_CONTEXT = b"ambit.resource.reconciliation.v1."
@@ -83,6 +84,7 @@ _GIT_DISPATCH_FIELDS = _RESOURCE_JOIN_FIELDS | frozenset(
         "force",
     }
 )
+_CUSTOMER_DELETE_DISPATCH_FIELDS = _DISPATCH_FIELDS | frozenset({"customer_id"})
 _TERMINAL_FIELDS = _RESOURCE_JOIN_FIELDS | frozenset(
     {
         "status",
@@ -107,7 +109,21 @@ _GIT_TERMINAL_FIELDS = _RESOURCE_JOIN_FIELDS | frozenset(
         "recorded_at",
     }
 )
+_CUSTOMER_DELETE_TERMINAL_FIELDS = _RESOURCE_JOIN_FIELDS | frozenset(
+    {
+        "customer_id",
+        "status",
+        "accepted_at",
+        "recorded_at",
+        "deleted_count",
+        "before_hash",
+        "before_state",
+        "after_state",
+        "reason",
+    }
+)
 _RECONCILIATION_FIELDS = _RESOURCE_JOIN_FIELDS | frozenset({"verb", "issued_at", "expires_at"})
+_CUSTOMER_DELETE_RECONCILIATION_FIELDS = _RECONCILIATION_FIELDS | frozenset({"customer_id"})
 _BINDING_FIELDS = frozenset(
     {
         "adapter_id",
@@ -205,7 +221,7 @@ def resource_binding_hash(binding: Mapping[str, Any]) -> str:
     if profile is None and public_key is None:
         return hash_object(value)
     if (
-        profile not in {RESOURCE_PROFILE, GIT_PUBLICATION_PROFILE}
+        profile not in {RESOURCE_PROFILE, GIT_PUBLICATION_PROFILE, CUSTOMER_DELETE_PROFILE}
         or not isinstance(public_key, str)
         or len(public_key) != 64
         or set(public_key) - _HEX
@@ -217,6 +233,8 @@ def resource_binding_hash(binding: Mapping[str, Any]) -> str:
             raise ValueError("Git publication requires the code adapter")
         _text(value.get("git_remote"), "resource binding git_remote")
         _git_ref(value.get("git_ref"), "resource binding git_ref")
+    elif profile == CUSTOMER_DELETE_PROFILE and value["adapter_id"] != "http":
+        raise ValueError("customer-delete requires the HTTP adapter")
     return hash_object(value)
 
 
@@ -322,6 +340,17 @@ def _dispatch_claims(value: Mapping[str, Any]) -> dict[str, Any]:
     profile = value.get("profile")
     if profile == RESOURCE_PROFILE:
         claims = _claims(value, fields=_DISPATCH_FIELDS, kind="dispatch", profile=profile)
+    elif profile == CUSTOMER_DELETE_PROFILE:
+        claims = _claims(
+            value, fields=_CUSTOMER_DELETE_DISPATCH_FIELDS, kind="dispatch", profile=profile
+        )
+        _text(claims.get("customer_id"), "dispatch customer_id")
+        if (
+            claims.get("action_type") != "delete"
+            or claims.get("action_boundary") != "network_egress"
+            or claims.get("action_domain") != "http"
+        ):
+            raise ValueError("dispatch customer-delete canonical action is invalid")
     elif profile == GIT_PUBLICATION_PROFILE:
         claims = _claims(value, fields=_GIT_DISPATCH_FIELDS, kind="dispatch", profile=profile)
         _text(claims.get("actor_id"), "dispatch actor_id")
@@ -374,6 +403,51 @@ def _outcome_claims(value: Mapping[str, Any]) -> dict[str, Any]:
         elif accepted_at is not None or count != 0 or records_hash is not None:
             raise ValueError("not_executed resource outcome must be a zero-record tombstone")
         return claims
+    if profile == CUSTOMER_DELETE_PROFILE:
+        claims = _claims(
+            value,
+            fields=_CUSTOMER_DELETE_TERMINAL_FIELDS,
+            kind="resource outcome",
+            profile=profile,
+        )
+        _text(claims.get("customer_id"), "resource outcome customer_id")
+        status = claims.get("status")
+        if status not in {"committed", "not_executed"}:
+            raise ValueError("resource outcome status is invalid")
+        accepted_at = claims.get("accepted_at")
+        if accepted_at is not None:
+            _time(accepted_at, "resource outcome accepted_at")
+        _time(claims.get("recorded_at"), "resource outcome recorded_at")
+        deleted_count = claims.get("deleted_count")
+        if not isinstance(deleted_count, int) or isinstance(deleted_count, bool):
+            raise ValueError("resource outcome deleted_count is invalid")
+        before_hash = claims.get("before_hash")
+        before_state = claims.get("before_state")
+        after_state = claims.get("after_state")
+        reason = claims.get("reason")
+        if status == "committed":
+            if (
+                accepted_at is None
+                or deleted_count != 1
+                or (before_state, after_state, reason) != ("present", "absent", "deleted")
+            ):
+                raise ValueError(
+                    "committed customer-delete outcome requires one deleted present customer"
+                )
+            _digest(before_hash, "resource outcome before_hash")
+        elif (
+            accepted_at is not None
+            or deleted_count != 0
+            or before_hash is not None
+            or (before_state, after_state, reason)
+            not in {
+                ("absent", "absent", "already_absent"),
+                ("unknown", "unknown", "rejected"),
+                ("unknown", "unknown", "cancelled"),
+            }
+        ):
+            raise ValueError("not_executed customer-delete outcome is invalid")
+        return claims
     if profile != GIT_PUBLICATION_PROFILE:
         raise ValueError("resource outcome profile is invalid")
     claims = _claims(value, fields=_GIT_TERMINAL_FIELDS, kind="resource outcome", profile=profile)
@@ -402,9 +476,20 @@ def _outcome_claims(value: Mapping[str, Any]) -> dict[str, Any]:
 
 def _reconciliation_claims(value: Mapping[str, Any]) -> dict[str, Any]:
     profile = value.get("profile")
-    if profile not in {RESOURCE_PROFILE, GIT_PUBLICATION_PROFILE}:
+    if profile not in {RESOURCE_PROFILE, GIT_PUBLICATION_PROFILE, CUSTOMER_DELETE_PROFILE}:
         raise ValueError("reconciliation profile is invalid")
-    claims = _claims(value, fields=_RECONCILIATION_FIELDS, kind="reconciliation", profile=profile)
+    claims = _claims(
+        value,
+        fields=(
+            _CUSTOMER_DELETE_RECONCILIATION_FIELDS
+            if profile == CUSTOMER_DELETE_PROFILE
+            else _RECONCILIATION_FIELDS
+        ),
+        kind="reconciliation",
+        profile=profile,
+    )
+    if profile == CUSTOMER_DELETE_PROFILE:
+        _text(claims.get("customer_id"), "reconciliation customer_id")
     if claims.get("verb") not in {"query", "cancel"}:
         raise ValueError("reconciliation verb is invalid")
     issued_at = _time(claims.get("issued_at"), "reconciliation issued_at")
@@ -504,6 +589,7 @@ def verify_reconciliation(token: str, *, public_key: bytes | str) -> dict[str, A
 
 
 __all__ = [
+    "CUSTOMER_DELETE_PROFILE",
     "DISPATCH_CONTEXT",
     "GIT_PUBLICATION_PROFILE",
     "OUTCOME_CONTEXT",

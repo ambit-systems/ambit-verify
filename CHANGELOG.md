@@ -28,7 +28,16 @@ follows [Semantic Versioning](https://semver.org/).
   committed-effect evidence; unresolved operations and signed releases retain
   their successful applicable checks without being relabelled as effects.
 
+- Document `customer-delete/1` as a signed, canonical customer effect: exact
+  HTTP dispatch selection, durable terminal-token retries, the committed and
+  no-change field sets, caller-pinned bundle verification, and the
+  `before_hash` privacy/custody limits. Keep `record-egress/1` separate.
+
 ### Fixed
+
+- Verify generic, zero-obligation prefix operations without interpreting them
+  as customer-deletion dispatches. Generic quantitative accounting remains
+  unestablished rather than being silently accepted.
 
 - Verify Git-publication execution evidence against the exact admitted remote,
   agent ref, non-forced old..new plan, native `git_push` quantity, and matching

@@ -70,6 +70,7 @@ from .receipt_links import (
     verify_receipt_records,
 )
 from .resource_protocol import (
+    CUSTOMER_DELETE_PROFILE,
     GIT_PUBLICATION_PROFILE,
     RESOURCE_PROFILE,
     dispatch_message,
@@ -107,6 +108,7 @@ __version__ = "0.1.0"
 __all__ = [
     "CONSUMPTION_PROFILE",
     "CUMULATIVE_STATUS_CONTEXT",
+    "CUSTOMER_DELETE_PROFILE",
     "GENESIS_HASH",
     "GIT_PUBLICATION_PROFILE",
     "MAX_VERIFICATION_CHAIN_DEPTH",

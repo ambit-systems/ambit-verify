@@ -21,6 +21,7 @@ from .hashing import canonical_json_bytes, hash_object
 from .head_attestation import ATTESTATION_BLOCK_KEYS, HeadAttestation
 from .head_attestation_ed25519 import Ed25519HeadVerifier
 from .resource_protocol import (
+    CUSTOMER_DELETE_PROFILE,
     git_publication_plan_hash,
     git_ref_is_covered,
     payload_bytes,
@@ -61,6 +62,8 @@ def _resource_join_fields(profile: object) -> tuple[str, ...]:
             "range",
             "force",
         )
+    if profile == CUSTOMER_DELETE_PROFILE:
+        return (*common, "customer_id")
     return common
 
 
@@ -255,6 +258,21 @@ def _accounting(decision: Mapping[str, Any]) -> None:
     tool_name = call["name"]
     arguments = call["arguments"]
     target = decision.get("object")
+    expected = required_account_bounds(
+        claims,
+        action_type=action_type,
+        action_boundary=action_boundary,
+    )
+    accounts = consumption.get("accounts")
+    if not isinstance(accounts, list) or len(accounts) != len(expected):
+        raise ValueError("operation accounting is incomplete")
+    if profile is None or (profile == CUSTOMER_DELETE_PROFILE and tool_name != "customer.delete"):
+        # Generic calls may share the ledger without claiming a signed effect.
+        # An empty obligation set is independently checkable; generic quantitative
+        # debits need their own supported derivation, never a trusted claimed amount.
+        if expected:
+            raise ValueError("generic quantitative operation accounting is not established")
+        return
     if profile == "record-egress/1":
         if not isinstance(arguments.get("records"), list) or not arguments["records"]:
             raise ValueError("record-egress decision lacks exact records")
@@ -267,6 +285,16 @@ def _accounting(decision: Mapping[str, Any]) -> None:
         domain = target.get("domain") if isinstance(target, Mapping) else None
         _signed_record_egress_scope(
             claims, action=action, domain=domain, authorized_at=authorized_at
+        )
+    elif profile == CUSTOMER_DELETE_PROFILE:
+        _customer_delete_call(call=call, target=target, binding=binding)
+        quantities = {
+            ("payload_size", "bytes"): len(
+                payload_bytes({"name": tool_name, "arguments": arguments})
+            ),
+        }
+        _signed_customer_delete_scope(
+            claims, action=action, target=target, authorized_at=authorized_at
         )
     elif profile == "git-publication/1":
         _git_publication_call(
@@ -284,14 +312,6 @@ def _accounting(decision: Mapping[str, Any]) -> None:
         )
     else:
         raise ValueError("operation has no supported signed resource profile")
-    expected = required_account_bounds(
-        claims,
-        action_type=action_type,
-        action_boundary=action_boundary,
-    )
-    accounts = consumption.get("accounts")
-    if not isinstance(accounts, list) or len(accounts) != len(expected):
-        raise ValueError("operation accounting is incomplete")
     unmatched = list(expected)
     for account in accounts:
         if not isinstance(account, Mapping):
@@ -399,6 +419,64 @@ def _git_publication_call(
     return dict(arguments)
 
 
+def _customer_delete_call(
+    *,
+    call: Mapping[str, Any],
+    target: object,
+    binding: Mapping[str, Any],
+) -> dict[str, str]:
+    """Validate the exact customer-delete HTTP call against its fixed endpoint."""
+    arguments = call.get("arguments")
+    required = {"customer_id", "destination", "route"}
+    if (
+        call.get("name") != "customer.delete"
+        or not isinstance(arguments, Mapping)
+        or set(arguments) != required
+        or not isinstance(target, Mapping)
+        or binding.get("adapter_id") != "http"
+        or not all(
+            isinstance(arguments.get(name), str)
+            and arguments[name]
+            and arguments[name] == arguments[name].strip()
+            for name in required
+        )
+        or target.get("id") != arguments.get("destination")
+        or arguments.get("route") != binding.get("downstream_path")
+        or arguments.get("destination")
+        != f"{binding.get('downstream_url')}{binding.get('downstream_path')}"
+    ):
+        raise ValueError("customer-delete call does not match its admitted resource")
+    return {name: arguments[name] for name in required}
+
+
+def _signed_customer_delete_scope(
+    claims: Sequence[Any],
+    *,
+    action: Mapping[str, Any],
+    target: object,
+    authorized_at: datetime,
+) -> None:
+    domain = target.get("domain") if isinstance(target, Mapping) else None
+    if (
+        action.get("type") != "delete"
+        or action.get("boundary") != "network_egress"
+        or domain != "http"
+    ):
+        raise ValueError("operation is not the fixed customer-delete action")
+    for claim in claims:
+        if "delete" not in claim.scope_actions:
+            raise ValueError("signed delegation does not cover customer-delete")
+        if "http" not in {item.strip().lower() for item in claim.scope_domains if item.strip()}:
+            raise ValueError("signed delegation does not cover the customer-delete domain")
+        if "." not in set(claim.scope_paths):
+            raise ValueError("signed delegation does not cover the customer-delete path")
+        if claim.capabilities and not any(
+            "delete" in capability.actions and capability.nbf <= authorized_at <= capability.exp
+            for capability in claim.capabilities
+        ):
+            raise ValueError("signed delegation capability does not cover customer-delete")
+
+
 def _signed_git_publication_scope(
     claims: Sequence[Any],
     *,
@@ -471,8 +549,6 @@ def _action_and_payload(
         if "url" in arguments:
             raise ValueError("record-egress call must not carry an arbitrary URL")
         return dict(claims), records
-    if claims.get("profile") != "git-publication/1":
-        raise ValueError("dispatch profile is unsupported")
     admission_evidence = (
         evidence.get("authority_admission") if isinstance(evidence, Mapping) else None
     )
@@ -482,7 +558,17 @@ def _action_and_payload(
         else None
     )
     if not isinstance(binding, Mapping):
-        raise ValueError("Git dispatch lacks its admitted resource binding")
+        raise ValueError("resource dispatch lacks its admitted resource binding")
+    if claims.get("profile") == CUSTOMER_DELETE_PROFILE:
+        customer = _customer_delete_call(call=call, target=target, binding=binding)
+        if (
+            claims.get("customer_id") != customer["customer_id"]
+            or claims.get("action_path") != customer["destination"]
+        ):
+            raise ValueError("customer-delete dispatch differs from its canonical request target")
+        return dict(claims), None
+    if claims.get("profile") != "git-publication/1":
+        raise ValueError("dispatch profile is unsupported")
     git = _git_publication_call(call=call, target=target, binding=binding)
     request_actor = request.get("actor") if isinstance(request, Mapping) else None
     if (
@@ -1250,6 +1336,9 @@ def verify_execution_bundle(
         if dispatch.get("decision_hash") != decision.get("record_hash"):
             raise ValueError("dispatch does not name the operation decision")
         claims, egress_records = _action_and_payload(decision, dispatch)
+        if claims.get("profile") == CUSTOMER_DELETE_PROFILE:
+            effect_check = "customer_delete_effect"
+            checks[effect_check] = checks.pop("record_effect")
     except (KeyError, TypeError, ValueError, OverflowError) as error:
         return failed("dispatch", error)
     checks["dispatch"] = "valid"

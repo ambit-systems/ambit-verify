@@ -144,6 +144,38 @@ history completeness, or the ordinary-audit scenario. A controlled record
 receiver is not a bank. It verifies the bounded retained evidence and
 caller-pinned public trust supplied to it.
 
+## Customer-deletion terminal evidence
+
+`customer-delete/1` is a signed resource profile for only the fixed HTTP
+`customer.delete` call. The dispatch binds the exact `customer_id`; destination
+and route must match the admitted resource binding. Its canonical action is
+`delete` / `network_egress` / `http`. Other HTTP calls at a binding configured with this
+profile remain ordinary transport outcomes, not customer-deletion evidence.
+
+The signed terminal outcome joins `customer_id` with the version, profile,
+domain, ledger, enforcement point, resource and binding identifiers; operation,
+request, payload, decision, and intent hashes. A committed outcome is
+`present` → `absent`, `reason: "deleted"`, `deleted_count: 1`, a required
+`accepted_at`, and a required `before_hash`. The canonical-operation verifier
+checks that join, the signature under the admitted outcome key, and the
+caller-pinned prefix, admission, registration, dispatch, accounting, and
+recorded effect before reporting `valid`.
+
+A distinct operation against an absent customer is signed `not_executed`
+evidence: `absent` → `absent`, `reason: "already_absent"`, zero deletions, and
+null `accepted_at` and `before_hash`. Rejected or cancelled pre-execution
+outcomes are likewise `not_executed`, `unknown` → `unknown`, with their
+respective reason and the same zero/null effect fields. An exact operation
+retry returns the retained signed terminal token; it does not claim a new
+delete.
+
+`before_hash` is the SHA-256 fingerprint of the canonical removed synthetic
+customer row. It carries no raw customer data, but it can still be a guessable
+commitment to personal data and is **not** anonymisation. The profile proves
+only the bounded retained evidence under caller-supplied public trust; it does
+not establish independent custody or a separate operator. `record-egress/1`
+is a separate signed record-egress profile, not a customer-deletion outcome.
+
 ## Install
 
 ```

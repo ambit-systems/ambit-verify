@@ -23,7 +23,11 @@ from .credential_evidence import verify_receipt_credentials
 from .hashing import canonical_json_bytes, hash_object, sha256_hex
 from .models import DelegationClaims
 from .ratification_bundle import GRANT_FILE, verify_ratification_bundle
-from .resource_protocol import git_ref_is_covered, resource_binding_hash
+from .resource_protocol import (
+    CUSTOMER_DELETE_PROFILE,
+    git_ref_is_covered,
+    resource_binding_hash,
+)
 from .revocation_types import verify_revocation_attestation
 from .status_evidence import (
     _status_from_evidence,
@@ -204,7 +208,8 @@ def _shape_errors(claims: Mapping[str, Any]) -> list[str]:
             if not (
                 (outcome_profile is None and outcome_public_key is None)
                 or (
-                    outcome_profile in {"record-egress/1", "git-publication/1"}
+                    outcome_profile
+                    in {"record-egress/1", "git-publication/1", CUSTOMER_DELETE_PROFILE}
                     and _digest(outcome_public_key)
                     and outcome_public_key != binding["receipt_public_key"]
                 )
