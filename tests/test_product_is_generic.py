@@ -18,12 +18,10 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-# What a customer receives and copies. `README.md`, `.github/` and `scripts/`
-# are our own clone and build instructions, which name our organisation because
-# they must. `docs/` cross-links to the documentation repository by design, a
-# deliberate pattern rather than leakage; whether a customer can follow those
-# links is a documentation decision, not a product one.
-SCANNED = ("src", "deploy")
+# What a customer receives, copies and reads. `README.md`, `.github/` and
+# `scripts/` are our own clone and build instructions, which name our
+# organisation because they must.
+SCANNED = ("src", "deploy", "docs")
 SKIP = {
     ".git",
     ".venv",
