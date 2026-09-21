@@ -248,7 +248,7 @@ def resource_binding_hash(binding: Mapping[str, Any]) -> str:
         if value["adapter_id"] != "code":
             raise ValueError("Git publication requires the code adapter")
         _text(value.get("git_remote"), "resource binding git_remote")
-        _git_ref(value.get("git_ref"), "resource binding git_ref")
+        validate_branch_ref(value.get("git_ref"), "resource binding git_ref")
     elif profile == CUSTOMER_DELETE_PROFILE and value["adapter_id"] != "http":
         raise ValueError("customer-delete requires the HTTP adapter")
     return hash_object(value)
@@ -293,7 +293,18 @@ def _git_oid(value: object, name: str) -> str:
     return value
 
 
-def _git_ref(value: object, name: str) -> str:
+def validate_branch_ref(value: object, name: str = "Git ref") -> str:
+    """Return ``value`` when it is a well-formed branch ref, else raise.
+
+    A branch ref lives under ``refs/heads/`` and obeys git's ref format: no
+    ``..``, no trailing dot, no empty or dot-prefixed component, no ``.lock``
+    component, and only the ref charset. Tags and unqualified names are not
+    branch refs and are refused here.
+
+    Shape is all this decides. Which branch may be published is the grant's
+    scope paths and the operator's admitted ``git_ref``, never this function,
+    so every caller in the product must use it rather than restate the rules.
+    """
     ref = _text(value, name)
     if (
         not ref.startswith("refs/heads/")
@@ -314,7 +325,7 @@ def _git_ref(value: object, name: str) -> str:
 
 def git_ref_is_covered(ref: str, scope_paths: Sequence[str]) -> bool:
     """Check an exact Git ref or a signed slash-delimited branch-prefix scope."""
-    _git_ref(ref, "Git ref")
+    validate_branch_ref(ref, "Git ref")
     return any(
         scope == ref
         or (scope.endswith("/*") and ref.startswith(scope[:-1]) and len(ref) > len(scope) - 1)
@@ -333,7 +344,7 @@ def git_publication_plan_hash(
 ) -> str:
     """Bind one non-forced update of an existing agent branch to its exact range."""
     _text(remote_url, "Git remote")
-    _git_ref(ref, "Git ref")
+    validate_branch_ref(ref, "Git ref")
     _git_oid(expected_old_oid, "Git expected_old_oid")
     _git_oid(new_oid, "Git new_oid")
     if (
