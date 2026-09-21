@@ -138,6 +138,13 @@ does not imply another check, and only all of them make `valid` true. The
 caller-pinned `expected_head` proves the supplied prefix ends at that head; it
 does not establish unseen global history, a later head, or freshness.
 
+For `git-publication/1`, `record_effect` in the report is renamed
+`git_publication_effect`. Its `resource_outcome` check accepts a `not_executed`
+outcome that carries an optional `reason`: one of `delegation_revoked`,
+`static_obligation_failed`, `compare_and_swap_mismatch`, `plan_hash_mismatch`,
+or `dispatch_expired`, naming which pre-commit check settled the operation
+without a push.
+
 This verifier does not establish independently operated humans, independent
 human custody, malicious-host effect prevention, bank settlement, global
 history completeness, or the ordinary-audit scenario. A controlled record
@@ -163,11 +170,14 @@ recorded effect before reporting `valid`.
 
 A distinct operation against an absent customer is signed `not_executed`
 evidence: `absent` → `absent`, `reason: "already_absent"`, zero deletions, and
-null `accepted_at` and `before_hash`. Rejected or cancelled pre-execution
-outcomes are likewise `not_executed`, `unknown` → `unknown`, with their
-respective reason and the same zero/null effect fields. An exact operation
-retry returns the retained signed terminal token; it does not claim a new
-delete.
+null `accepted_at` and `before_hash`. Rejected, cancelled, or
+delegation-revoked pre-execution outcomes are likewise `not_executed`,
+`unknown` → `unknown`, with their respective reason (`rejected`, `cancelled`,
+or `delegation_revoked`) and the same zero/null effect fields. A
+delegation-revoked outcome is recorded when the door's commit-time revocation
+check finds the authorising delegation revoked and refuses to commit. An
+exact operation retry returns the retained signed terminal token; it does not
+claim a new delete.
 
 `before_hash` is the SHA-256 fingerprint of the canonical removed synthetic
 customer row. It carries no raw customer data, but it can still be a guessable

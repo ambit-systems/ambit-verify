@@ -15,6 +15,7 @@ from ambit_verify import canonical_json_bytes, verify_authority_admission
 from ambit_verify.resource_protocol import (
     GIT_PUBLICATION_PROFILE,
     dispatch_message,
+    dispatch_revocation_identity,
     git_publication_plan_hash,
     outcome_message,
     verify_dispatch,
@@ -114,6 +115,26 @@ def test_git_terminal_unknown_is_signed_but_never_a_success_status() -> None:
     assert verify_resource_outcome(token, public_key=key.public_key().public_bytes_raw()) == claims
 
 
+def test_git_not_executed_reason_delegation_revoked_signs_and_verifies() -> None:
+    key = Ed25519PrivateKey.generate()
+    claims = {**_outcome("not_executed"), "reason": "delegation_revoked"}
+    token = _token(claims, outcome_message(claims), key)
+
+    assert verify_resource_outcome(token, public_key=key.public_key().public_bytes_raw()) == claims
+
+
+def test_git_reason_on_a_committed_outcome_is_refused() -> None:
+    claims = {**_outcome("committed"), "reason": "delegation_revoked"}
+    with pytest.raises(ValueError):
+        outcome_message(claims)
+
+
+def test_git_unknown_reason_string_is_refused() -> None:
+    claims = {**_outcome("not_executed"), "reason": "not_a_real_reason"}
+    with pytest.raises(ValueError):
+        outcome_message(claims)
+
+
 def _admission_token(claims: dict[str, object], key: Ed25519PrivateKey) -> str:
     payload = {**claims, "trust_root_id": "admission"}
     encoded = base64.urlsafe_b64encode(canonical_json_bytes(payload)).rstrip(b"=")
@@ -180,3 +201,36 @@ def test_git_binding_requires_schema3_and_retains_its_fixed_remote_and_ref() -> 
     )
     assert verified.valid and verified.admission is not None
     assert verified.admission.claims["resource_binding"]["git_remote"] == "console-candidate"
+
+
+def test_dispatch_revocation_identity_is_optional_and_strict() -> None:
+    key = Ed25519PrivateKey.generate()
+    public_key = key.public_key().public_bytes_raw()
+    bare = _dispatch()
+    assert dispatch_revocation_identity(bare) is None
+
+    claims = {**_dispatch(), "delegation_jtis": ["grant-1", "grant-0"], "revocation_epoch": 7}
+    token = _token(claims, dispatch_message(claims), key)
+    verified = verify_dispatch(token, public_key=public_key)
+    assert verified == claims
+    assert dispatch_revocation_identity(verified) == (("grant-1", "grant-0"), 7)
+
+    for broken in (
+        {**claims, "revocation_epoch": None},
+        {**claims, "revocation_epoch": -1},
+        {**claims, "revocation_epoch": True},
+        {**claims, "delegation_jtis": []},
+        {**claims, "delegation_jtis": ["grant-1", "grant-1"]},
+        {**claims, "delegation_jtis": ["grant-1", 2]},
+        {**claims, "delegation_jtis": "grant-1"},
+    ):
+        with pytest.raises(ValueError):
+            dispatch_message(broken)
+    half = dict(claims)
+    half.pop("revocation_epoch")
+    with pytest.raises(ValueError):
+        dispatch_message(half)
+    half = dict(claims)
+    half.pop("delegation_jtis")
+    with pytest.raises(ValueError):
+        dispatch_message(half)

@@ -85,6 +85,13 @@ _GIT_DISPATCH_FIELDS = _RESOURCE_JOIN_FIELDS | frozenset(
     }
 )
 _CUSTOMER_DELETE_DISPATCH_FIELDS = _DISPATCH_FIELDS | frozenset({"customer_id"})
+# The identity a dispatch's revocation stands on: the delegation jti chain the
+# decision validated, nearest grant first, and the revocation epoch the store
+# stated at ALLOW. A resource door reads both to re-check revocation at commit
+# time. They travel together or not at all; a dispatch signed before the pair
+# existed keeps the field set it always had.
+_REVOCATION_IDENTITY_FIELDS = frozenset({"delegation_jtis", "revocation_epoch"})
+_MAX_DELEGATION_JTIS = 16
 _TERMINAL_FIELDS = _RESOURCE_JOIN_FIELDS | frozenset(
     {
         "status",
@@ -120,6 +127,15 @@ _CUSTOMER_DELETE_TERMINAL_FIELDS = _RESOURCE_JOIN_FIELDS | frozenset(
         "before_state",
         "after_state",
         "reason",
+    }
+)
+_GIT_OUTCOME_REASONS = frozenset(
+    {
+        "delegation_revoked",
+        "static_obligation_failed",
+        "compare_and_swap_mismatch",
+        "plan_hash_mismatch",
+        "dispatch_expired",
     }
 )
 _RECONCILIATION_FIELDS = _RESOURCE_JOIN_FIELDS | frozenset({"verb", "issued_at", "expires_at"})
@@ -239,10 +255,15 @@ def resource_binding_hash(binding: Mapping[str, Any]) -> str:
 
 
 def _claims(
-    value: Mapping[str, Any], *, fields: frozenset[str], kind: str, profile: str
+    value: Mapping[str, Any],
+    *,
+    fields: frozenset[str],
+    kind: str,
+    profile: str,
+    optional: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     copied = _canonical_object(value, name=f"{kind} claims")
-    if set(copied) != fields:
+    if set(copied) not in (fields, fields | optional):
         raise ValueError(f"{kind} claim fields are invalid")
     if copied.get("version") != 1 or copied.get("profile") != profile:
         raise ValueError(f"{kind} version or profile is invalid")
@@ -339,10 +360,20 @@ def git_publication_plan_hash(
 def _dispatch_claims(value: Mapping[str, Any]) -> dict[str, Any]:
     profile = value.get("profile")
     if profile == RESOURCE_PROFILE:
-        claims = _claims(value, fields=_DISPATCH_FIELDS, kind="dispatch", profile=profile)
+        claims = _claims(
+            value,
+            fields=_DISPATCH_FIELDS,
+            kind="dispatch",
+            profile=profile,
+            optional=_REVOCATION_IDENTITY_FIELDS,
+        )
     elif profile == CUSTOMER_DELETE_PROFILE:
         claims = _claims(
-            value, fields=_CUSTOMER_DELETE_DISPATCH_FIELDS, kind="dispatch", profile=profile
+            value,
+            fields=_CUSTOMER_DELETE_DISPATCH_FIELDS,
+            kind="dispatch",
+            profile=profile,
+            optional=_REVOCATION_IDENTITY_FIELDS,
         )
         _text(claims.get("customer_id"), "dispatch customer_id")
         if (
@@ -352,7 +383,13 @@ def _dispatch_claims(value: Mapping[str, Any]) -> dict[str, Any]:
         ):
             raise ValueError("dispatch customer-delete canonical action is invalid")
     elif profile == GIT_PUBLICATION_PROFILE:
-        claims = _claims(value, fields=_GIT_DISPATCH_FIELDS, kind="dispatch", profile=profile)
+        claims = _claims(
+            value,
+            fields=_GIT_DISPATCH_FIELDS,
+            kind="dispatch",
+            profile=profile,
+            optional=_REVOCATION_IDENTITY_FIELDS,
+        )
         _text(claims.get("actor_id"), "dispatch actor_id")
         expected_plan = git_publication_plan_hash(
             remote_url=claims["remote"],
@@ -378,7 +415,38 @@ def _dispatch_claims(value: Mapping[str, Any]) -> dict[str, Any]:
     not_after = _time(claims.get("not_after"), "dispatch not_after")
     if not_after < authorized_at:
         raise ValueError("dispatch not_after precedes authorized_at")
+    if "delegation_jtis" in claims:
+        _revocation_identity(claims)
     return claims
+
+
+def _revocation_identity(claims: Mapping[str, Any]) -> None:
+    jtis = claims.get("delegation_jtis")
+    if (
+        not isinstance(jtis, list)
+        or not 1 <= len(jtis) <= _MAX_DELEGATION_JTIS
+        or any(
+            not isinstance(jti, str) or not 1 <= len(jti) <= 256 or jti != jti.strip()
+            for jti in jtis
+        )
+        or len(set(jtis)) != len(jtis)
+    ):
+        raise ValueError("dispatch delegation_jtis is invalid")
+    epoch = claims.get("revocation_epoch")
+    if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
+        raise ValueError("dispatch revocation_epoch is invalid")
+
+
+def dispatch_revocation_identity(claims: Mapping[str, Any]) -> tuple[tuple[str, ...], int] | None:
+    """Return the delegation jti chain and ALLOW-time epoch a dispatch carries.
+
+    ``None`` when the dispatch predates the pair. A door that requires the
+    pair refuses ``None``; the verifier accepts both generations.
+    """
+    if "delegation_jtis" not in claims:
+        return None
+    _revocation_identity(claims)
+    return tuple(claims["delegation_jtis"]), int(claims["revocation_epoch"])
 
 
 def _outcome_claims(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -444,13 +512,20 @@ def _outcome_claims(value: Mapping[str, Any]) -> dict[str, Any]:
                 ("absent", "absent", "already_absent"),
                 ("unknown", "unknown", "rejected"),
                 ("unknown", "unknown", "cancelled"),
+                ("unknown", "unknown", "delegation_revoked"),
             }
         ):
             raise ValueError("not_executed customer-delete outcome is invalid")
         return claims
     if profile != GIT_PUBLICATION_PROFILE:
         raise ValueError("resource outcome profile is invalid")
-    claims = _claims(value, fields=_GIT_TERMINAL_FIELDS, kind="resource outcome", profile=profile)
+    claims = _claims(
+        value,
+        fields=_GIT_TERMINAL_FIELDS,
+        kind="resource outcome",
+        profile=profile,
+        optional=frozenset({"reason"}),
+    )
     _text(claims.get("actor_id"), "resource outcome actor_id")
     expected_plan = git_publication_plan_hash(
         remote_url=claims["remote"],
@@ -470,6 +545,9 @@ def _outcome_claims(value: Mapping[str, Any]) -> dict[str, Any]:
         _time(accepted_at, "resource outcome accepted_at")
     elif accepted_at is not None:
         raise ValueError("non-committed Git outcome must not claim acceptance")
+    reason = claims.get("reason")
+    if reason is not None and (status != "not_executed" or reason not in _GIT_OUTCOME_REASONS):
+        raise ValueError("resource outcome reason is invalid")
     _time(claims.get("recorded_at"), "resource outcome recorded_at")
     return claims
 

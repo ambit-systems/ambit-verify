@@ -15,6 +15,7 @@ from ambit_verify import canonical_json_bytes, verify_authority_admission
 from ambit_verify.resource_protocol import (
     CUSTOMER_DELETE_PROFILE,
     dispatch_message,
+    dispatch_revocation_identity,
     outcome_message,
     reconciliation_message,
     resource_binding_hash,
@@ -159,6 +160,24 @@ def test_customer_delete_outcomes_require_explicit_state_transition() -> None:
     token = _token(absent, outcome_message(absent), key)
     assert verify_resource_outcome(token, public_key=key.public_key().public_bytes_raw()) == absent
 
+    revoked = _outcome(status="not_executed")
+    revoked["before_state"] = "unknown"
+    revoked["after_state"] = "unknown"
+    revoked["reason"] = "delegation_revoked"
+    token = _token(revoked, outcome_message(revoked), key)
+    assert verify_resource_outcome(token, public_key=key.public_key().public_bytes_raw()) == revoked
+
+    invalid_revoked_absent = _outcome(status="not_executed")
+    invalid_revoked_absent["reason"] = "delegation_revoked"
+    with pytest.raises(ValueError):
+        outcome_message(invalid_revoked_absent)
+
+    invalid_revoked_present = _outcome(status="not_executed")
+    invalid_revoked_present["before_state"] = "present"
+    invalid_revoked_present["reason"] = "delegation_revoked"
+    with pytest.raises(ValueError):
+        outcome_message(invalid_revoked_present)
+
     missing_post_state = _outcome()
     missing_post_state.pop("after_state")
     with pytest.raises(ValueError):
@@ -233,3 +252,36 @@ def test_customer_delete_six_field_binding_is_admitted_under_schema2() -> None:
     )
 
     assert verified.valid and verified.admission is not None
+
+
+def test_dispatch_revocation_identity_is_optional_and_strict() -> None:
+    key = Ed25519PrivateKey.generate()
+    public_key = key.public_key().public_bytes_raw()
+    bare = _dispatch()
+    assert dispatch_revocation_identity(bare) is None
+
+    claims = {**_dispatch(), "delegation_jtis": ["grant-1", "grant-0"], "revocation_epoch": 7}
+    token = _token(claims, dispatch_message(claims), key)
+    verified = verify_dispatch(token, public_key=public_key)
+    assert verified == claims
+    assert dispatch_revocation_identity(verified) == (("grant-1", "grant-0"), 7)
+
+    for broken in (
+        {**claims, "revocation_epoch": None},
+        {**claims, "revocation_epoch": -1},
+        {**claims, "revocation_epoch": True},
+        {**claims, "delegation_jtis": []},
+        {**claims, "delegation_jtis": ["grant-1", "grant-1"]},
+        {**claims, "delegation_jtis": ["grant-1", 2]},
+        {**claims, "delegation_jtis": "grant-1"},
+    ):
+        with pytest.raises(ValueError):
+            dispatch_message(broken)
+    half = dict(claims)
+    half.pop("revocation_epoch")
+    with pytest.raises(ValueError):
+        dispatch_message(half)
+    half = dict(claims)
+    half.pop("delegation_jtis")
+    with pytest.raises(ValueError):
+        dispatch_message(half)

@@ -6,6 +6,25 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Dispatch claims in every resource profile may carry the revocation identity
+  the decision stood on: `delegation_jtis` (the validated delegation jti chain,
+  nearest grant first) and `revocation_epoch` (the store's epoch at ALLOW).
+  The pair is present together or absent together, so retained dispatches
+  signed before it existed still verify. `dispatch_revocation_identity` reads
+  the pair for a resource door that re-checks revocation at commit time.
+- The `customer-delete/1` resource profile accepts a `not_executed` outcome
+  with `before_state` and `after_state` both `unknown` and reason
+  `delegation_revoked`. The door records this outcome when its commit-time
+  revocation check finds the authorising delegation revoked and refuses to
+  commit.
+- The `git-publication/1` terminal outcome grammar accepts an optional
+  `reason` field, allowed only on `not_executed`: one of `delegation_revoked`,
+  `static_obligation_failed`, `compare_and_swap_mismatch`,
+  `plan_hash_mismatch`, or `dispatch_expired`. The door writes
+  `delegation_revoked` when its commit-time revocation gate refuses.
+
 ### Changed
 
 - `verify_receipt_credentials` returns `origin_admission` (`not_established`, `valid` or `failed`) and accepts `admission_trust_roots`; a `valid` chain result does not establish origin unless `origin_admission` is `valid`.
