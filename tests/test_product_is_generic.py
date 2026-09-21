@@ -34,13 +34,7 @@ MARKERS: dict[str, re.Pattern[str]] = {
 # Each entry is one known violation kept only until it is extracted, with the
 # reason it survives. A violation that is fixed must be deleted from here: an
 # unused entry fails this test, so the list can only shrink.
-ALLOWED: dict[tuple[str, str], str] = {
-    ("ambit_verify/resource_protocol.py", "company branch namespace"): (
-        "The public verifier requires our own agent branch namespace, so a "
-        "customer publishing elsewhere cannot verify a valid receipt. The "
-        "constraint belongs in the authority entry, checked against the receipt."
-    ),
-}
+ALLOWED: dict[tuple[str, str], str] = {}
 
 
 def _found() -> set[tuple[str, str]]:

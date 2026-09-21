@@ -296,7 +296,7 @@ def _git_oid(value: object, name: str) -> str:
 def _git_ref(value: object, name: str) -> str:
     ref = _text(value, name)
     if (
-        not ref.startswith("refs/heads/agent/")
+        not ref.startswith("refs/heads/")
         or any(
             character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/-"
             for character in ref
@@ -308,7 +308,7 @@ def _git_ref(value: object, name: str) -> str:
             for component in ref.split("/")
         )
     ):
-        raise ValueError(f"{name} must be an agent branch ref")
+        raise ValueError(f"{name} must be a branch ref")
     return ref
 
 

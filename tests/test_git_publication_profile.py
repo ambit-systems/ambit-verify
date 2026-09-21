@@ -107,6 +107,36 @@ def test_git_dispatch_requires_a_non_forced_agent_ref_and_exact_range() -> None:
         dispatch_message(claims)
 
 
+def test_git_ref_accepts_any_branch_namespace_and_still_refuses_non_branches() -> None:
+    """The product is generic: a customer names their own branch namespace.
+
+    Which branch may be published is the operator's admitted `git_ref`, matched
+    exactly at dispatch. The protocol constrains ref shape only.
+    """
+    for ref in (
+        "refs/heads/agent/console/fix",
+        "refs/heads/bot/nightly",
+        "refs/heads/automation/release-train",
+    ):
+        assert git_publication_plan_hash(
+            remote_url="ssh://git@example.invalid/repo.git",
+            ref=ref,
+            expected_old_oid="a" * 40,
+            new_oid="b" * 40,
+            commit_range=f"{'a' * 40}..{'b' * 40}",
+        )
+
+    for ref in ("refs/tags/v1", "refs/heads/", "refs/heads/bad..name", "main"):
+        with pytest.raises(ValueError):
+            git_publication_plan_hash(
+                remote_url="ssh://git@example.invalid/repo.git",
+                ref=ref,
+                expected_old_oid="a" * 40,
+                new_oid="b" * 40,
+                commit_range=f"{'a' * 40}..{'b' * 40}",
+            )
+
+
 def test_git_terminal_unknown_is_signed_but_never_a_success_status() -> None:
     key = Ed25519PrivateKey.generate()
     claims = _outcome("unknown")
