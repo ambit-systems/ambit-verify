@@ -16,9 +16,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from ambit_verify import (
     CUMULATIVE_STATUS_CONTEXT,
     RATIFICATION_RULE_VERSION,
+    AuthorityAdmission,
     DelegationClaims,
     ratifier_reach_widening_axis,
     request_binding_matches,
+    validate_delegation_chain,
     verify_admitted_path,
     verify_authority_admission,
     verify_cumulative_status_payload,
@@ -26,14 +28,32 @@ from ambit_verify import (
 )
 from ambit_verify.actor_proof import actor_proof_request_hash
 from ambit_verify.admission import _verify_revocation_status
-from ambit_verify.attenuation import ATTENUATION_RULE_VERSION, _scope_widening_axis
+from ambit_verify.attenuation import (
+    ATTENUATION_RULE_VERSION,
+    _scope_widening_axis,
+    attenuation_rule_hash,
+)
+from ambit_verify.authority_entry import authority_entry_hash, parse_authority_entry
+from ambit_verify.claim_shapes import delegation_content_hash
+from ambit_verify.hashing import canonical_iso, canonical_json_bytes, sha256_hex
+from ambit_verify.ratification import (
+    build_candidate_core,
+    parents_content_hash,
+    parse_ratification,
+    ratification_hash,
+)
 from ambit_verify.revocation_types import (
     REVOCATION_CONTEXT,
     RevocationStatus,
     revocation_attestation_payload,
     signed_status_bytes,
 )
-from ambit_verify.tokens_slips import parse_delegation
+from ambit_verify.status_evidence import status_artefact, status_artefact_hash
+from ambit_verify.tokens_slips import (
+    SLIP_CONTEXT_DELEGATION,
+    SLIP_CONTEXT_RATIFICATION,
+    parse_delegation,
+)
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "origin"
 
@@ -227,6 +247,225 @@ def test_admitted_path_accepts_the_exact_completed_public_origin() -> None:
     )
 
     assert verification.valid
+
+
+def _sign_slip(key: Ed25519PrivateKey, claims: dict[str, object], *, context: str) -> str:
+    encoded = base64.urlsafe_b64encode(canonical_json_bytes(claims)).rstrip(b"=").decode("ascii")
+    signature = key.sign(f"{context}.{encoded}".encode())
+    return f"{encoded}.ed25519:{base64.b64encode(signature).decode('ascii')}"
+
+
+def _build_two_root_admitted_chain() -> tuple[
+    AuthorityAdmission, str, str, dict[str, bytes], datetime
+]:
+    """Mint a complete admitted origin and one child delegation, signed under two roots.
+
+    Everything the admitted path needs is minted here: the authority entry, its
+    ratification, the ratifier's own grant, its signed revocation status, and the
+    issued origin grant -- all under root A (the origin issuer) and the ratifier's
+    own root. The returned child delegation is signed under root B, a third,
+    unrelated key, so a caller can hold every other axis fixed and vary only the
+    signer.
+    """
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    ratified_at = base + timedelta(days=1)
+    at = base + timedelta(days=2)
+    enforcement_point_id = "0123456789abcdef"
+
+    issuer_key = Ed25519PrivateKey.generate()
+    ratifier_key = Ed25519PrivateKey.generate()
+    delegation_key = Ed25519PrivateKey.generate()
+    revocation_key = Ed25519PrivateKey.generate()
+    issuer_root = "issuer-root-a"
+    ratifier_root = "ratifier-root"
+    delegation_root = "delegation-root-b"
+    revocation_root = "revocation-root"
+
+    trust_roots = {
+        issuer_root: {
+            "scheme": "ed25519",
+            "public_key": issuer_key.public_key().public_bytes_raw().hex(),
+        },
+        ratifier_root: {
+            "scheme": "ed25519",
+            "public_key": ratifier_key.public_key().public_bytes_raw().hex(),
+        },
+        delegation_root: {
+            "scheme": "ed25519",
+            "public_key": delegation_key.public_key().public_bytes_raw().hex(),
+        },
+    }
+    revocation_trust_roots = {revocation_root: revocation_key.public_key().public_bytes_raw().hex()}
+
+    entry_dict = {
+        "entry_id": "two-root-entry",
+        "schema_version": "1",
+        "revision": 1,
+        "principal": "Acme Pty Ltd",
+        "issuer_trust_root_id": issuer_root,
+        "subject": "holder-a",
+        "scope_actions": ["delegate"],
+        "scope_domains": ["filesystem"],
+        "scope_paths": ["/data"],
+        "bound": {"kind": "calls", "unit": "count", "amount_scaled": "10"},
+        "nbf": canonical_iso(base),
+        "exp": canonical_iso(base + timedelta(days=365)),
+        "max_depth": 1,
+        "effective_at": canonical_iso(base),
+        "enforcement_points": [enforcement_point_id],
+    }
+    entry = parse_authority_entry(entry_dict)
+    entry_hash = authority_entry_hash(entry)
+    core, core_bytes, core_hash = build_candidate_core(entry, attempt=1)
+    candidate_nbf = max(entry.nbf, entry.effective_at)
+
+    ratifier_leaf_claims = {
+        "jti": "ratifier-leaf",
+        "sub": ratifier_root,
+        "scope_actions": ["delegate"],
+        "scope_paths": ["/data"],
+        "scope_domains": ["filesystem"],
+        "nbf": canonical_iso(base - timedelta(days=1)),
+        "exp": canonical_iso(base + timedelta(days=400)),
+        "chain_depth": 0,
+        "max_depth": 1,
+        "trust_root_id": ratifier_root,
+    }
+    ratifier_leaf_token = _sign_slip(
+        ratifier_key, ratifier_leaf_claims, context=SLIP_CONTEXT_DELEGATION
+    )
+    ratifier_ok, ratifier_leaf = parse_delegation(ratifier_leaf_token, trust_roots=trust_roots)
+    assert ratifier_ok and ratifier_leaf is not None
+
+    freshness_bound_ms = 30 * 24 * 60 * 60 * 1000
+    unsigned_status = RevocationStatus(
+        is_revoked=False,
+        checked_at=base,
+        freshness_bound_ms=freshness_bound_ms,
+        source="test",
+        verifiable=True,
+        attestation=None,
+        trust_root_id=revocation_root,
+        revocation_epoch=1,
+    )
+    status_signature = revocation_key.sign(
+        signed_status_bytes(
+            revocation_attestation_payload(unsigned_status, ratifier_leaf.jti),
+            context=REVOCATION_CONTEXT,
+        )
+    )
+    status = RevocationStatus(
+        is_revoked=False,
+        checked_at=base,
+        freshness_bound_ms=freshness_bound_ms,
+        source="test",
+        verifiable=True,
+        attestation="ed25519:" + base64.b64encode(status_signature).decode("ascii"),
+        trust_root_id=revocation_root,
+        revocation_epoch=1,
+    )
+    status_artefact_dict = status_artefact(status, ratifier_leaf.jti)
+    status_hash = status_artefact_hash(status_artefact_dict)
+
+    ratification_claims = {
+        "ratification_id": "ratification-two-root",
+        "entry_id": entry.entry_id,
+        "revision": entry.revision,
+        "attempt": 1,
+        "authority_entry_hash": entry_hash,
+        "candidate_core_hash": core_hash,
+        "rule_version": RATIFICATION_RULE_VERSION,
+        "attenuation_rule_hash": attenuation_rule_hash(),
+        "effective_at": canonical_iso(candidate_nbf),
+        "ratified_at": canonical_iso(ratified_at),
+        "nbf": canonical_iso(max(candidate_nbf, ratified_at)),
+        "exp": canonical_iso(min(entry.exp, ratifier_leaf.exp)),
+        "issuer_trust_root_id": issuer_root,
+        "ratifier_jti": ratifier_leaf.jti,
+        "ratifier_sub": ratifier_leaf.sub,
+        "ratifier_trust_root_id": ratifier_root,
+        "ratifier_leaf_content_hash": delegation_content_hash(ratifier_leaf),
+        "ratifier_parents_content_hash": parents_content_hash([]),
+        "status_evidence_hashes": [{"jti": ratifier_leaf.jti, "hash": status_hash}],
+        "trust_root_id": ratifier_root,
+    }
+    ratification_token = _sign_slip(
+        ratifier_key, ratification_claims, context=SLIP_CONTEXT_RATIFICATION
+    )
+    ratification_ok, parsed_ratification = parse_ratification(
+        ratification_token, trust_roots=trust_roots
+    )
+    assert ratification_ok and parsed_ratification is not None
+
+    origin_claims = {
+        **core,
+        "ratification_hash": ratification_hash(parsed_ratification),
+        "trust_root_id": issuer_root,
+    }
+    origin_token = _sign_slip(issuer_key, origin_claims, context=SLIP_CONTEXT_DELEGATION)
+    origin_ok, origin = parse_delegation(origin_token, trust_roots=trust_roots)
+    assert origin_ok and origin is not None
+
+    child_claims = {
+        "jti": "child-under-root-b",
+        "sub": "holder-b",
+        "scope_actions": list(origin.scope_actions),
+        "scope_paths": list(origin.scope_paths),
+        "scope_domains": list(origin.scope_domains),
+        "nbf": canonical_iso(origin.nbf),
+        "exp": canonical_iso(origin.nbf + timedelta(days=300)),
+        "parent_jti": origin.jti,
+        "chain_depth": 1,
+        "max_depth": 1,
+        "bounds": [dict(bound) for bound in origin.bounds],
+        "aud": list(origin.aud),
+        "authority_entry_hash": origin.authority_entry_hash,
+        "ratification_hash": origin.ratification_hash,
+        "trust_root_id": delegation_root,
+    }
+    child_token = _sign_slip(delegation_key, child_claims, context=SLIP_CONTEXT_DELEGATION)
+
+    admission = AuthorityAdmission(
+        claims={
+            "credential_trust_roots": trust_roots,
+            "revocation_attestation_public_keys": revocation_trust_roots,
+            "credential_registration_public_keys": {},
+            "enforcement_point_id": enforcement_point_id,
+            "origin_grant_hashes": [sha256_hex(origin_token.encode("utf-8"))],
+        },
+        admission_hash="0" * 64,
+        trust_configuration_hash="0" * 64,
+        nbf=base,
+        exp=base + timedelta(days=365),
+    )
+    artifacts = {
+        "entry.json": json.dumps(entry_dict).encode("utf-8"),
+        "candidate.json": core_bytes,
+        "ratification.slip": ratification_token.encode("utf-8"),
+        "ratifier-leaf.slip": ratifier_leaf_token.encode("utf-8"),
+        "status-0.json": json.dumps(status_artefact_dict).encode("utf-8"),
+        "grant.slip": origin_token.encode("utf-8"),
+    }
+    return admission, origin_token, child_token, artifacts, at
+
+
+def test_admitted_path_refuses_a_child_signed_under_a_second_root() -> None:
+    admission, origin_token, child_token, artifacts, at = _build_two_root_admitted_chain()
+    roots = admission.claims["credential_trust_roots"]
+
+    child_ok, child = parse_delegation(child_token, trust_roots=roots)
+    assert child_ok and child is not None
+
+    chain = validate_delegation_chain(child, [origin_token], trust_roots=roots, evaluation_time=at)
+    assert chain.valid
+    assert not chain.depth_exceeded
+
+    verification = verify_admitted_path(
+        child_token, [origin_token], artifacts, admission=admission, at=at
+    )
+
+    assert not verification.valid
+    assert any("differs from admitted origin issuer" in error for error in verification.errors)
 
 
 def test_authority_envelope_seal_does_not_change_holder_intent_hash() -> None:

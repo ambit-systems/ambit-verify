@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from ambit_verify import canonical_json_bytes, verify_authority_admission
 from ambit_verify.resource_protocol import (
     GIT_PUBLICATION_PROFILE,
+    dispatch_max_revocation_age_ms,
     dispatch_message,
     dispatch_revocation_identity,
     git_publication_plan_hash,
@@ -264,3 +265,31 @@ def test_dispatch_revocation_identity_is_optional_and_strict() -> None:
     half.pop("delegation_jtis")
     with pytest.raises(ValueError):
         dispatch_message(half)
+
+
+def test_dispatch_max_revocation_age_ms_travels_only_with_the_pair() -> None:
+    key = Ed25519PrivateKey.generate()
+    public_key = key.public_key().public_bytes_raw()
+    paired = {**_dispatch(), "delegation_jtis": ["grant-1", "grant-0"], "revocation_epoch": 7}
+
+    bounded = {**paired, "max_revocation_age_ms": 5000}
+    token = _token(bounded, dispatch_message(bounded), key)
+    verified = verify_dispatch(token, public_key=public_key)
+    assert verified == bounded
+    assert dispatch_max_revocation_age_ms(verified) == 5000
+
+    token = _token(paired, dispatch_message(paired), key)
+    verified = verify_dispatch(token, public_key=public_key)
+    assert verified == paired
+    assert dispatch_max_revocation_age_ms(verified) is None
+
+    unpaired = {**_dispatch(), "max_revocation_age_ms": 5000}
+    with pytest.raises(ValueError):
+        dispatch_message(unpaired)
+
+    for broken in (0, -1, True, "5000"):
+        with pytest.raises(ValueError, match="dispatch max_revocation_age_ms is invalid"):
+            dispatch_message({**bounded, "max_revocation_age_ms": broken})
+    # A float fails the shared payload rule against floating-point values first.
+    with pytest.raises(ValueError):
+        dispatch_message({**bounded, "max_revocation_age_ms": 1.5})

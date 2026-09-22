@@ -24,6 +24,15 @@ follows [Semantic Versioning](https://semver.org/).
   `static_obligation_failed`, `compare_and_swap_mismatch`,
   `plan_hash_mismatch`, or `dispatch_expired`. The door writes
   `delegation_revoked` when its commit-time revocation gate refuses.
+- Dispatch claims may also carry `max_revocation_age_ms`, a copy of the leaf
+  grant's own bound on revocation-answer age. It travels only alongside the
+  `delegation_jtis`/`revocation_epoch` pair, never alone, and `verify_dispatch`
+  refuses a malformed value. `dispatch_max_revocation_age_ms` reads it for a
+  resource door that applies the stricter of the principal's bound and its own
+  freshness bound.
+- A regression test proves `verify_admitted_path` refuses an otherwise-valid
+  two-hop admitted path whose child delegation is signed under a different
+  credential root than the admitted origin grant.
 
 ### Changed
 

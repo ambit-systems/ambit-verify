@@ -89,8 +89,13 @@ _CUSTOMER_DELETE_DISPATCH_FIELDS = _DISPATCH_FIELDS | frozenset({"customer_id"})
 # decision validated, nearest grant first, and the revocation epoch the store
 # stated at ALLOW. A resource door reads both to re-check revocation at commit
 # time. They travel together or not at all; a dispatch signed before the pair
-# existed keeps the field set it always had.
+# existed keeps the field set it always had. `max_revocation_age_ms` is the
+# principal's own bound on revocation-answer age; it is optional and travels
+# only alongside the pair, never alone.
 _REVOCATION_IDENTITY_FIELDS = frozenset({"delegation_jtis", "revocation_epoch"})
+_REVOCATION_IDENTITY_WITH_BOUND_FIELDS = _REVOCATION_IDENTITY_FIELDS | frozenset(
+    {"max_revocation_age_ms"}
+)
 _MAX_DELEGATION_JTIS = 16
 _TERMINAL_FIELDS = _RESOURCE_JOIN_FIELDS | frozenset(
     {
@@ -260,10 +265,11 @@ def _claims(
     fields: frozenset[str],
     kind: str,
     profile: str,
-    optional: frozenset[str] = frozenset(),
+    optional: tuple[frozenset[str], ...] = (),
 ) -> dict[str, Any]:
     copied = _canonical_object(value, name=f"{kind} claims")
-    if set(copied) not in (fields, fields | optional):
+    allowed = {fields, *(fields | group for group in optional)}
+    if set(copied) not in allowed:
         raise ValueError(f"{kind} claim fields are invalid")
     if copied.get("version") != 1 or copied.get("profile") != profile:
         raise ValueError(f"{kind} version or profile is invalid")
@@ -376,7 +382,7 @@ def _dispatch_claims(value: Mapping[str, Any]) -> dict[str, Any]:
             fields=_DISPATCH_FIELDS,
             kind="dispatch",
             profile=profile,
-            optional=_REVOCATION_IDENTITY_FIELDS,
+            optional=(_REVOCATION_IDENTITY_FIELDS, _REVOCATION_IDENTITY_WITH_BOUND_FIELDS),
         )
     elif profile == CUSTOMER_DELETE_PROFILE:
         claims = _claims(
@@ -384,7 +390,7 @@ def _dispatch_claims(value: Mapping[str, Any]) -> dict[str, Any]:
             fields=_CUSTOMER_DELETE_DISPATCH_FIELDS,
             kind="dispatch",
             profile=profile,
-            optional=_REVOCATION_IDENTITY_FIELDS,
+            optional=(_REVOCATION_IDENTITY_FIELDS, _REVOCATION_IDENTITY_WITH_BOUND_FIELDS),
         )
         _text(claims.get("customer_id"), "dispatch customer_id")
         if (
@@ -399,7 +405,7 @@ def _dispatch_claims(value: Mapping[str, Any]) -> dict[str, Any]:
             fields=_GIT_DISPATCH_FIELDS,
             kind="dispatch",
             profile=profile,
-            optional=_REVOCATION_IDENTITY_FIELDS,
+            optional=(_REVOCATION_IDENTITY_FIELDS, _REVOCATION_IDENTITY_WITH_BOUND_FIELDS),
         )
         _text(claims.get("actor_id"), "dispatch actor_id")
         expected_plan = git_publication_plan_hash(
@@ -428,6 +434,8 @@ def _dispatch_claims(value: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("dispatch not_after precedes authorized_at")
     if "delegation_jtis" in claims:
         _revocation_identity(claims)
+    if "max_revocation_age_ms" in claims:
+        _dispatch_max_revocation_age(claims)
     return claims
 
 
@@ -448,6 +456,12 @@ def _revocation_identity(claims: Mapping[str, Any]) -> None:
         raise ValueError("dispatch revocation_epoch is invalid")
 
 
+def _dispatch_max_revocation_age(claims: Mapping[str, Any]) -> None:
+    bound = claims.get("max_revocation_age_ms")
+    if not isinstance(bound, int) or isinstance(bound, bool) or bound <= 0:
+        raise ValueError("dispatch max_revocation_age_ms is invalid")
+
+
 def dispatch_revocation_identity(claims: Mapping[str, Any]) -> tuple[tuple[str, ...], int] | None:
     """Return the delegation jti chain and ALLOW-time epoch a dispatch carries.
 
@@ -458,6 +472,20 @@ def dispatch_revocation_identity(claims: Mapping[str, Any]) -> tuple[tuple[str, 
         return None
     _revocation_identity(claims)
     return tuple(claims["delegation_jtis"]), int(claims["revocation_epoch"])
+
+
+def dispatch_max_revocation_age_ms(claims: Mapping[str, Any]) -> int | None:
+    """Return the principal's bound on revocation-answer age a dispatch carries.
+
+    ``None`` when the key is absent: a dispatch that predates the bound, or
+    whose leaf grant stated none. Present only alongside
+    :func:`dispatch_revocation_identity`'s pair, never alone; a resource door
+    reads it to apply the stricter of the principal's bound and its own freshness bound.
+    """
+    if "max_revocation_age_ms" not in claims:
+        return None
+    _dispatch_max_revocation_age(claims)
+    return int(claims["max_revocation_age_ms"])
 
 
 def _outcome_claims(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -535,7 +563,7 @@ def _outcome_claims(value: Mapping[str, Any]) -> dict[str, Any]:
         fields=_GIT_TERMINAL_FIELDS,
         kind="resource outcome",
         profile=profile,
-        optional=frozenset({"reason"}),
+        optional=(frozenset({"reason"}),),
     )
     _text(claims.get("actor_id"), "resource outcome actor_id")
     expected_plan = git_publication_plan_hash(
