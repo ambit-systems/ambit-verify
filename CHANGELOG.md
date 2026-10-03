@@ -37,16 +37,17 @@ follows [Semantic Versioning](https://semver.org/).
   `counterparty_ingress_url`: a validated absolute HTTP(S) transport URL
   without userinfo or fragment. The exact value is included in the
   `resource_binding_hash`; absent fields retain the prior binding hash.
-- Admission schema 4 carries a required signed
+- Historical admission schema 4 carries a required signed
   `trusted_counterparty_points` map (empty for ordinary admissions). Each
   admitted point binds its A domain, ledger, resource id, resource-binding
   hash, enforcement-point id, Ed25519 key, revocation roots and freshness
   bound, plus B's signed consent chain. Historical schema 1–3 validation
-  remains unchanged; schema 4 supports the existing record-egress,
-  customer-delete, and Git resource bindings.
+  remains unchanged; schema 4 retains its independent record-egress,
+  customer-delete, and Git resource-binding validation without claiming the
+  current exact bilateral-consent contract.
 - `verify_foreign_dispatch` and execution-bundle replay verify retained
-  foreign customer-delete dispatches only against B's verified schema-4
-  admission. They bind the raw dispatch digest, admitted point snapshot,
+  foreign customer-delete dispatches only against B's verified schema-4 or
+  schema-5 admission. They bind the raw dispatch digest, admitted point snapshot,
   A resource binding, foreign signed revocation statuses, canonical B
   request/action/payload, B-consent subject and actor-key fingerprint. The
   replayed consumed fact is `foreign_dispatch` keyed by the raw dispatch
@@ -59,6 +60,25 @@ follows [Semantic Versioning](https://semver.org/).
   a single-use reference to the preceding authenticated `counterparty_resume`
   request, which binds the exact pending acknowledgment, raw context, and B
   approval token.
+- Current schema-5 customer-delete B admissions with configured foreign points
+  must bind `foreign_revocation_policy_hash` to Verify's deterministic
+  projection of the signed point map and credential roots. The projection
+  cryptographically verifies the configured B consent slips and pins their
+  exact ordered JTI chains; missing, substituted, or malformed policy bindings
+  are rejected.
+- Customer-delete terminal syntax now accepts the closed optional
+  `foreign_revocation_evidence` object
+  `{foreign_dispatch_hash, policy_hash, statuses, checked_at}`. The terminal
+  parser validates its exact field types while shared foreign-revocation
+  verification checks the signed A dependency, statuses, gate time, and
+  committed-terminal requirement. A signed `not_executed` terminal may omit
+  clearance, but any supplied clearance remains strict.
+- Document the current schema-5 proof boundary: B-only evidence establishes A
+  enforcement-point acceptance of B's exact consent chain, while
+  bilateral-principal proof additionally requires the independently verified A
+  admission and byte-exact A dispatch join. Final foreign clearance reduces
+  the revocation window but does not claim distributed atomicity after either
+  authority's final authenticated observation.
 
 ### Changed
 

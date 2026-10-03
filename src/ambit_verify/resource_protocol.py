@@ -92,6 +92,7 @@ _GIT_DISPATCH_FIELDS = _RESOURCE_JOIN_FIELDS | frozenset(
     }
 )
 _CUSTOMER_DELETE_DISPATCH_FIELDS = _DISPATCH_FIELDS | frozenset({"customer_id"})
+_COUNTERPARTY_CONSENT_HASH_FIELD = frozenset({"counterparty_consent_hash"})
 # The identity a dispatch's revocation stands on: the delegation jti chain the
 # decision validated, nearest grant first, and the revocation epoch the store
 # stated at ALLOW. A resource door reads both to re-check revocation at commit
@@ -164,6 +165,10 @@ _BINDING_FIELDS = frozenset(
 )
 _GIT_BINDING_FIELDS = _BINDING_FIELDS | frozenset({"git_remote", "git_ref"})
 _COUNTERPARTY_INGRESS_BINDING_FIELDS = frozenset({"counterparty_ingress_url"})
+_COUNTERPARTY_CONSENT_BINDING_FIELDS = frozenset({"counterparty_consent_hash"})
+_FOREIGN_REVOCATION_POLICY_HASH_FIELD = frozenset({"foreign_revocation_policy_hash"})
+_FOREIGN_DEPENDENCY_FIELD = frozenset({"foreign_dependency"})
+_FOREIGN_REVOCATION_EVIDENCE_FIELD = frozenset({"foreign_revocation_evidence"})
 
 _COUNTERPARTY_ACK_BASE_FIELDS = frozenset(
     {
@@ -310,12 +315,23 @@ def resource_binding_hash(binding: Mapping[str, Any]) -> str:
     expected_fields = _GIT_BINDING_FIELDS if profile == GIT_PUBLICATION_PROFILE else _BINDING_FIELDS
     if "counterparty_ingress_url" in value:
         expected_fields |= _COUNTERPARTY_INGRESS_BINDING_FIELDS
+    if "counterparty_consent_hash" in value:
+        expected_fields |= _COUNTERPARTY_CONSENT_BINDING_FIELDS
+    if "foreign_revocation_policy_hash" in value:
+        expected_fields |= _FOREIGN_REVOCATION_POLICY_HASH_FIELD
     if set(value) != expected_fields:
         raise ValueError("resource binding fields are invalid")
     for name in ("adapter_id", "downstream_url", "downstream_path"):
         _text(value.get(name), f"resource binding {name}")
     if "counterparty_ingress_url" in value:
         validate_counterparty_ingress_url(value["counterparty_ingress_url"])
+    if "counterparty_consent_hash" in value:
+        _digest(value["counterparty_consent_hash"], "resource binding counterparty_consent_hash")
+    if "foreign_revocation_policy_hash" in value:
+        _digest(
+            value["foreign_revocation_policy_hash"],
+            "resource binding foreign_revocation_policy_hash",
+        )
     _digest(value.get("receipt_public_key"), "resource binding receipt_public_key")
     public_key = value.get("outcome_public_key")
     if profile is None and public_key is None:
@@ -469,9 +485,37 @@ def _dispatch_claims(value: Mapping[str, Any]) -> dict[str, Any]:
             fields=_CUSTOMER_DELETE_DISPATCH_FIELDS,
             kind="dispatch",
             profile=profile,
-            optional=(_REVOCATION_IDENTITY_FIELDS, _REVOCATION_IDENTITY_WITH_BOUND_FIELDS),
+            optional=(
+                _REVOCATION_IDENTITY_FIELDS,
+                _REVOCATION_IDENTITY_WITH_BOUND_FIELDS,
+                _COUNTERPARTY_CONSENT_HASH_FIELD,
+                _REVOCATION_IDENTITY_FIELDS | _COUNTERPARTY_CONSENT_HASH_FIELD,
+                _REVOCATION_IDENTITY_WITH_BOUND_FIELDS | _COUNTERPARTY_CONSENT_HASH_FIELD,
+                _FOREIGN_DEPENDENCY_FIELD,
+                _REVOCATION_IDENTITY_FIELDS | _FOREIGN_DEPENDENCY_FIELD,
+                _REVOCATION_IDENTITY_WITH_BOUND_FIELDS | _FOREIGN_DEPENDENCY_FIELD,
+                _COUNTERPARTY_CONSENT_HASH_FIELD | _FOREIGN_DEPENDENCY_FIELD,
+                _REVOCATION_IDENTITY_FIELDS
+                | _COUNTERPARTY_CONSENT_HASH_FIELD
+                | _FOREIGN_DEPENDENCY_FIELD,
+                _REVOCATION_IDENTITY_WITH_BOUND_FIELDS
+                | _COUNTERPARTY_CONSENT_HASH_FIELD
+                | _FOREIGN_DEPENDENCY_FIELD,
+            ),
         )
         _text(claims.get("customer_id"), "dispatch customer_id")
+        if "counterparty_consent_hash" in claims:
+            _digest(claims["counterparty_consent_hash"], "dispatch counterparty_consent_hash")
+        dependency = claims.get("foreign_dependency")
+        if dependency is not None:
+            if (
+                not isinstance(dependency, Mapping)
+                or set(dependency) != {"dispatch", "policy_hash"}
+                or not isinstance(dependency.get("dispatch"), str)
+                or not dependency["dispatch"]
+            ):
+                raise ValueError("dispatch foreign dependency is invalid")
+            _digest(dependency.get("policy_hash"), "dispatch foreign dependency policy_hash")
         if (
             claims.get("action_type") != "delete"
             or claims.get("action_boundary") != "network_egress"
@@ -900,6 +944,34 @@ def dispatch_max_revocation_age_ms(claims: Mapping[str, Any]) -> int | None:
     return int(claims["max_revocation_age_ms"])
 
 
+def _foreign_revocation_evidence(value: object) -> None:
+    """Validate the closed terminal syntax for B's final foreign clearance."""
+    if not isinstance(value, Mapping) or set(value) != {
+        "foreign_dispatch_hash",
+        "policy_hash",
+        "statuses",
+        "checked_at",
+    }:
+        raise ValueError("resource outcome foreign revocation evidence is invalid")
+    _digest(
+        value.get("foreign_dispatch_hash"),
+        "resource outcome foreign revocation evidence dispatch hash",
+    )
+    _digest(
+        value.get("policy_hash"),
+        "resource outcome foreign revocation evidence policy hash",
+    )
+    statuses = value.get("statuses")
+    if not isinstance(statuses, list) or any(
+        not isinstance(status, Mapping) for status in statuses
+    ):
+        raise ValueError("resource outcome foreign revocation evidence statuses are invalid")
+    _time(
+        value.get("checked_at"),
+        "resource outcome foreign revocation evidence checked_at",
+    )
+
+
 def _outcome_claims(value: Mapping[str, Any]) -> dict[str, Any]:
     profile = value.get("profile")
     if profile == RESOURCE_PROFILE:
@@ -928,8 +1000,11 @@ def _outcome_claims(value: Mapping[str, Any]) -> dict[str, Any]:
             fields=_CUSTOMER_DELETE_TERMINAL_FIELDS,
             kind="resource outcome",
             profile=profile,
+            optional=(_FOREIGN_REVOCATION_EVIDENCE_FIELD,),
         )
         _text(claims.get("customer_id"), "resource outcome customer_id")
+        if "foreign_revocation_evidence" in claims:
+            _foreign_revocation_evidence(claims["foreign_revocation_evidence"])
         status = claims.get("status")
         if status not in {"committed", "not_executed"}:
             raise ValueError("resource outcome status is invalid")

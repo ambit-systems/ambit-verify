@@ -127,6 +127,22 @@ selects its existing B approval trust root only from the signed B point
 selector, joins the context to B's canonical request, destination, consent,
 and native request justification, and refuses a hash-only or legacy path.
 
+
+Schema 4 is historical phase-2 evidence: its signed point map establishes the
+weaker, then-current counterparty receipt contract and remains independently
+readable. It neither upgrades old receipts to exact bilateral consent nor
+proves A-principal admission acceptance. Current bilateral admissions use
+schema 5. A schema-5 customer-delete B binding with configured foreign points
+must freeze `foreign_revocation_policy_hash`, the hash of Verify's deterministic
+projection of its signed point map and credential roots. The projection includes
+the admitted A identity and status pins, exact consent hash, and the
+cryptographically verified ordered B consent JTI chain.
+
+A schema-5 B-only public proof establishes A's authenticated enforcement-point
+acceptance of that exact B consent chain under B's admitted A-point pin. It
+does not prove that A's principal accepted B. A paired bilateral-principal proof
+additionally verifies the independently supplied raw A admission/binding and
+joins the byte-exact raw A dispatch between the A and B bundles.
 Counterparty pending acknowledgments are B outcome-key signatures over the
 frozen A dispatch/body hashes. A resume fence records the awaiting-approval
 acknowledgment's context, B request fingerprint, B escalation hash, and the
@@ -141,7 +157,8 @@ evidence leaves that claim `not_established`, with an explanatory error.
 Dependent checks remain `not_established`. `valid` means every one of the
 nine checks is `valid`. A signed `not_executed` terminal outcome authenticates
 a release but does not establish an effect: `resource_outcome` is `valid`,
-`record_effect` is `not_established`, and aggregate `valid` is false.
+the applicable effect check (`record_effect`, `customer_delete_effect`, or
+`git_publication_effect`) is `not_established`, and aggregate `valid` is false.
 
 The same verifier is available at the command line. Every trust input is a
 separate caller-owned document; bundled roots are never adopted:
@@ -210,6 +227,22 @@ delegation-revoked outcome is recorded when the door's commit-time revocation
 check finds the authorising delegation revoked and refuses to commit. An
 exact operation retry returns the retained signed terminal token; it does not
 claim a new delete.
+
+For a schema-5 B customer-delete dispatch selected by configured foreign
+consent, `foreign_dependency` is a closed signed object with the exact raw A
+dispatch and the B policy hash; raw A dispatches cannot nest another foreign
+dependency. A committed foreign B terminal carries the closed signed
+`foreign_revocation_evidence` object
+`{foreign_dispatch_hash, policy_hash, statuses, checked_at}`. Public replay
+rederives the signed B policy, joins the raw A bytes and hash to the native B
+dispatch and retained A artifact, and validates every A status at the one gate
+time under A's independent roots and epoch floor. A signed `not_executed`
+foreign terminal may omit clearance; any clearance it does carry is verified
+with the same strict rules.
+
+This proves the authenticated final A read precedes the recorded B terminal,
+not distributed atomicity: either authority can revoke after its last
+authenticated observation and before the physical B delete.
 
 `before_hash` is the SHA-256 fingerprint of the canonical removed synthetic
 customer row. It carries no raw customer data, but it can still be a guessable

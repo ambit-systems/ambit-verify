@@ -20,6 +20,7 @@ from typing import Any
 from .actor_proof import actor_proof_request_hash, verify_actor_proof
 from .consumption import required_account_bounds
 from .credential_evidence import verify_receipt_credentials
+from .foreign_revocation import project_foreign_revocation_policy
 from .hashing import canonical_json_bytes, hash_object, sha256_hex
 from .models import DelegationClaims
 from .ratification_bundle import GRANT_FILE, verify_ratification_bundle
@@ -48,8 +49,9 @@ from .tokens import validate_delegation_chain
 from .tokens_slips import _verified_slip_signer_id, _verify_slip, parse_delegation
 
 ADMISSION_CONTEXT = "ambit:authority-admission:v1"
-ADMISSION_SCHEMA_VERSION = 4
-SUPPORTED_ADMISSION_SCHEMA_VERSIONS = frozenset({1, 2, 3, ADMISSION_SCHEMA_VERSION})
+ADMISSION_SCHEMA_VERSION = 5
+_COUNTERPARTY_ADMISSION_SCHEMA_VERSIONS = frozenset({4, 5})
+SUPPORTED_ADMISSION_SCHEMA_VERSIONS = frozenset({1, 2, 3, *_COUNTERPARTY_ADMISSION_SCHEMA_VERSIONS})
 _HEX = frozenset("0123456789abcdef")
 _BASE_FIELDS = frozenset(
     {
@@ -223,7 +225,9 @@ def _shape_errors(claims: Mapping[str, Any]) -> list[str]:
     )
     if not valid_schema_version:
         errors.append("unsupported admission schema version")
-    expected_fields = _FIELDS if version == ADMISSION_SCHEMA_VERSION else _BASE_FIELDS
+    expected_fields = (
+        _FIELDS if version in _COUNTERPARTY_ADMISSION_SCHEMA_VERSIONS else _BASE_FIELDS
+    )
     if set(claims) != expected_fields:
         errors.append(f"admission fields do not match schema version {version!r}")
     for name in ("domain_id", "principal_id", "resource_id", "ledger_id", "trust_root_id"):
@@ -251,7 +255,7 @@ def _shape_errors(claims: Mapping[str, Any]) -> list[str]:
         errors.append("admission must bind exact originating grant hashes")
     elif len(set(origins)) != len(origins):
         errors.append("admission contains duplicate originating grant hashes")
-    if version == ADMISSION_SCHEMA_VERSION:
+    if version in _COUNTERPARTY_ADMISSION_SCHEMA_VERSIONS:
         errors.extend(
             _counterparty_point_errors(
                 claims.get("trusted_counterparty_points"),
@@ -277,21 +281,30 @@ def _shape_errors(claims: Mapping[str, Any]) -> list[str]:
                 errors.append(f"admission {name} requires Ed25519 public keys")
     binding = claims.get("resource_binding")
     binding_fields = {"adapter_id", "downstream_url", "downstream_path", "receipt_public_key"}
-    if valid_schema_version and version in {2, 3, ADMISSION_SCHEMA_VERSION}:
+    if valid_schema_version and version in {2, 3, *_COUNTERPARTY_ADMISSION_SCHEMA_VERSIONS}:
         binding_fields |= {"outcome_profile", "outcome_public_key"}
     if (
-        version in {3, ADMISSION_SCHEMA_VERSION}
+        version in {3, *_COUNTERPARTY_ADMISSION_SCHEMA_VERSIONS}
         and isinstance(binding, Mapping)
         and binding.get("outcome_profile") == "git-publication/1"
     ):
         binding_fields |= {"git_remote", "git_ref"}
     if (
         valid_schema_version
-        and version in {2, 3, ADMISSION_SCHEMA_VERSION}
+        and version in {2, 3, *_COUNTERPARTY_ADMISSION_SCHEMA_VERSIONS}
         and isinstance(binding, Mapping)
         and "counterparty_ingress_url" in binding
     ):
         binding_fields |= {"counterparty_ingress_url"}
+    if version == ADMISSION_SCHEMA_VERSION and isinstance(binding, Mapping):
+        ingress = "counterparty_ingress_url" in binding
+        consent = "counterparty_consent_hash" in binding
+        if ingress != consent:
+            errors.append("admission schema5 counterparty consent binding is invalid")
+        if "foreign_revocation_policy_hash" in binding:
+            binding_fields |= {"foreign_revocation_policy_hash"}
+        if consent:
+            binding_fields |= {"counterparty_consent_hash"}
     if not isinstance(binding, Mapping) or set(binding) != binding_fields:
         errors.append("admission resource binding fields are invalid")
     else:
@@ -305,7 +318,7 @@ def _shape_errors(claims: Mapping[str, Any]) -> list[str]:
                 errors.append("admission counterparty ingress URL is invalid")
         if not _digest(binding["receipt_public_key"]):
             errors.append("admission resource receipt public key is invalid")
-        if valid_schema_version and version in {2, 3, ADMISSION_SCHEMA_VERSION}:
+        if valid_schema_version and version in {2, 3, *_COUNTERPARTY_ADMISSION_SCHEMA_VERSIONS}:
             outcome_profile = binding["outcome_profile"]
             outcome_public_key = binding["outcome_public_key"]
             if not (
@@ -322,9 +335,33 @@ def _shape_errors(claims: Mapping[str, Any]) -> list[str]:
                 resource_binding_hash(binding)
             except TypeError, ValueError:
                 errors.append("admission resource binding is invalid")
+            if version == ADMISSION_SCHEMA_VERSION:
+                points = claims.get("trusted_counterparty_points")
+                has_policy_hash = "foreign_revocation_policy_hash" in binding
+                requires_policy_hash = (
+                    binding.get("outcome_profile") == CUSTOMER_DELETE_PROFILE
+                    and isinstance(points, Mapping)
+                    and bool(points)
+                )
+                if has_policy_hash != requires_policy_hash:
+                    errors.append("admission schema5 foreign revocation policy binding is invalid")
+                elif has_policy_hash and isinstance(points, Mapping):
+                    try:
+                        policy = project_foreign_revocation_policy(
+                            points, claims["credential_trust_roots"]
+                        )
+                    except TypeError, ValueError:
+                        errors.append(
+                            "admission schema5 foreign revocation policy projection is invalid"
+                        )
+                    else:
+                        if binding["foreign_revocation_policy_hash"] != hash_object(policy):
+                            errors.append(
+                                "admission schema5 foreign revocation policy hash differs"
+                            )
             if outcome_profile == "git-publication/1" and version not in {
                 3,
-                ADMISSION_SCHEMA_VERSION,
+                *_COUNTERPARTY_ADMISSION_SCHEMA_VERSIONS,
             }:
                 errors.append("admission Git resource binding is invalid")
             elif version == 3 and outcome_profile != "git-publication/1":
@@ -410,7 +447,7 @@ def verify_authority_admission(
             errors.append("admission does not continue the accepted predecessor")
         configuration_fields = (
             _TRUST_CONFIGURATION_FIELDS
-            if claims["schema_version"] == ADMISSION_SCHEMA_VERSION
+            if claims["schema_version"] in _COUNTERPARTY_ADMISSION_SCHEMA_VERSIONS
             else _ROOT_FIELDS
         )
         trust_hash = hash_object({name: claims[name] for name in configuration_fields})
@@ -536,7 +573,7 @@ def admission_configuration_matches(
     """Compare complete public verification preimages, not mutable root aliases."""
     fields = (
         _TRUST_CONFIGURATION_FIELDS
-        if admission.claims.get("schema_version") == ADMISSION_SCHEMA_VERSION
+        if admission.claims.get("schema_version") in _COUNTERPARTY_ADMISSION_SCHEMA_VERSIONS
         else _ROOT_FIELDS
     )
     try:
@@ -874,6 +911,7 @@ class ForeignDispatchVerification:
     valid: bool
     dispatch_hash: str | None = None
     not_after: datetime | None = None
+    counterparty_consent_hash_valid: bool | None = None
     errors: tuple[str, ...] = ()
 
 
@@ -893,7 +931,7 @@ def verify_foreign_dispatch(
     if (
         not isinstance(receipt, Mapping)
         or not isinstance(admission, AuthorityAdmission)
-        or admission.claims.get("schema_version") != ADMISSION_SCHEMA_VERSION
+        or admission.claims.get("schema_version") not in _COUNTERPARTY_ADMISSION_SCHEMA_VERSIONS
         or not isinstance(at, datetime)
         or at.tzinfo is None
         or at.utcoffset() is None
@@ -949,6 +987,10 @@ def verify_foreign_dispatch(
         )
     _point_id, point, claims = candidates[0]
     public_key = point["public_key"]
+    if "foreign_dependency" in claims:
+        return ForeignDispatchVerification(
+            False, errors=("foreign dispatch must not nest a foreign dependency",)
+        )
     if (
         claims.get("domain_id") != point["domain_id"]
         or claims.get("ledger_id") != point["ledger_id"]
@@ -960,6 +1002,15 @@ def verify_foreign_dispatch(
         return ForeignDispatchVerification(
             False, errors=("foreign dispatch point identity, binding, or profile differs",)
         )
+    if admission.claims.get("schema_version") == ADMISSION_SCHEMA_VERSION:
+        expected_consent_hash = counterparty_consent_hash(
+            delegation_token=point["consent_delegation_token"],
+            parent_delegation_tokens=point["consent_parent_delegation_tokens"],
+        )
+        if claims.get("counterparty_consent_hash") != expected_consent_hash:
+            return ForeignDispatchVerification(
+                False, errors=("foreign dispatch counterparty consent hash differs",)
+            )
     request = evidence.get("request_envelope") if isinstance(evidence, Mapping) else None
     action = receipt.get("action")
     target = receipt.get("object")
@@ -1107,7 +1158,12 @@ def verify_foreign_dispatch(
         return ForeignDispatchVerification(
             False, errors=(f"foreign dispatch revocation epoch regressed at {regression}",)
         )
-    return ForeignDispatchVerification(True, dispatch_hash, not_after)
+    return ForeignDispatchVerification(
+        True,
+        dispatch_hash,
+        not_after,
+        admission.claims.get("schema_version") == ADMISSION_SCHEMA_VERSION,
+    )
 
 
 def _verify_cumulative_rows(
@@ -1291,8 +1347,13 @@ def verify_execution_authority(
     if not admission_result.valid or admission is None:
         errors.extend(admission_result.errors)
         return ExecutionAuthorityVerification(False, checks, tuple(errors))
-    if evidence_schema == "6" and admission.claims.get("schema_version") not in {2, 3, 4}:
-        errors.append("schema-v6 execution evidence requires admission schema 2, 3, or 4")
+    if evidence_schema == "6" and admission.claims.get("schema_version") not in {
+        2,
+        3,
+        4,
+        ADMISSION_SCHEMA_VERSION,
+    }:
+        errors.append("schema-v6 execution evidence requires admission schema 2, 3, 4, or 5")
     admission_summary_matches = (
         admission_evidence.get("admission_hash") == admission.admission_hash
         and admission_evidence.get("trust_configuration_hash") == admission.trust_configuration_hash
@@ -1343,7 +1404,7 @@ def verify_execution_authority(
     configuration = admission_evidence.get("verification_configuration")
     configuration_fields = (
         _TRUST_CONFIGURATION_FIELDS
-        if admission.claims.get("schema_version") == ADMISSION_SCHEMA_VERSION
+        if admission.claims.get("schema_version") in _COUNTERPARTY_ADMISSION_SCHEMA_VERSIONS
         else _ROOT_FIELDS
     )
     if (

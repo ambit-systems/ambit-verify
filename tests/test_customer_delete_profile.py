@@ -227,6 +227,38 @@ def test_customer_delete_outcomes_require_explicit_state_transition() -> None:
         outcome_message(invalid_absent)
 
 
+def test_customer_delete_terminal_foreign_clearance_has_closed_syntax() -> None:
+    key = Ed25519PrivateKey.generate()
+    evidence = {
+        "foreign_dispatch_hash": "d" * 64,
+        "policy_hash": "e" * 64,
+        "statuses": [{}],
+        "checked_at": "2026-01-01T00:00:01Z",
+    }
+    committed = {**_outcome(), "foreign_revocation_evidence": evidence}
+    token = _token(committed, outcome_message(committed), key)
+    assert (
+        verify_resource_outcome(token, public_key=key.public_key().public_bytes_raw()) == committed
+    )
+
+    released = {**_outcome(status="not_executed"), "foreign_revocation_evidence": evidence}
+    token = _token(released, outcome_message(released), key)
+    assert (
+        verify_resource_outcome(token, public_key=key.public_key().public_bytes_raw()) == released
+    )
+
+    for invalid in (
+        {**evidence, "extra": True},
+        {**evidence, "foreign_dispatch_hash": "D" * 64},
+        {**evidence, "policy_hash": None},
+        {**evidence, "statuses": {}},
+        {**evidence, "statuses": ["not-a-status"]},
+        {**evidence, "checked_at": "2026-01-01T00:00:01"},
+    ):
+        with pytest.raises(ValueError):
+            outcome_message({**_outcome(), "foreign_revocation_evidence": invalid})
+
+
 def test_customer_delete_reconciliation_is_bound_to_the_customer() -> None:
     key = Ed25519PrivateKey.generate()
     claims = _reconciliation()

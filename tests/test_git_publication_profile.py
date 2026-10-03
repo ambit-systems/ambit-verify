@@ -174,7 +174,7 @@ def _admission_token(claims: dict[str, object], key: Ed25519PrivateKey) -> str:
 
 
 def _git_admission(schema_version: int) -> dict[str, object]:
-    return {
+    claims: dict[str, object] = {
         "schema_version": schema_version,
         "domain_id": "git",
         "principal_id": "console-owner",
@@ -204,9 +204,12 @@ def _git_admission(schema_version: int) -> dict[str, object]:
         "max_cumulative_age_ms": 1000,
         "max_actor_proof_age_seconds": 10,
     }
+    if schema_version == 4:
+        claims["trusted_counterparty_points"] = {}
+    return claims
 
 
-def test_git_binding_requires_schema3_and_retains_its_fixed_remote_and_ref() -> None:
+def test_schema3_and_schema4_git_bindings_retain_fixed_remote_and_ref() -> None:
     signer = Ed25519PrivateKey.generate()
     roots = {
         "admission": {
@@ -232,6 +235,15 @@ def test_git_binding_requires_schema3_and_retains_its_fixed_remote_and_ref() -> 
     )
     assert verified.valid and verified.admission is not None
     assert verified.admission.claims["resource_binding"]["git_remote"] == "console-candidate"
+
+    historical = verify_authority_admission(
+        _admission_token(_git_admission(4), signer),
+        admission_trust_roots=roots,
+        expected_domain="git",
+        expected_ledger_id="ledger",
+        at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    assert historical.valid and historical.admission is not None
 
 
 def test_dispatch_revocation_identity_is_optional_and_strict() -> None:

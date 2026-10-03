@@ -15,12 +15,18 @@ from typing import Any
 
 from .actor_proof import actor_proof_request_hash, verify_actor_proof
 from .admission import (
+    ADMISSION_SCHEMA_VERSION,
     verify_authority_admission,
     verify_execution_authority,
     verify_foreign_dispatch,
 )
 from .consumption import required_account_bounds, validate_consumption_record
 from .credential_registration import verify_enforcement_point_registration
+from .foreign_revocation import (
+    project_foreign_revocation_policy,
+    verify_foreign_dependency,
+    verify_foreign_revocation_evidence,
+)
 from .hashing import canonical_json_bytes, hash_object, sha256_hex
 from .head_attestation import ATTESTATION_BLOCK_KEYS, HeadAttestation
 from .head_attestation_ed25519 import Ed25519HeadVerifier
@@ -1330,6 +1336,107 @@ def _replay_prefix(
                 operation_states[operation_id] = "committed"
 
 
+def _require_admitted_schema5_consent(
+    admission: Any, native_dispatch_claims: Mapping[str, Any]
+) -> None:
+    """Require a schema-5 A dispatch to retain its admitted consent digest."""
+    claims = getattr(admission, "claims", None)
+    binding = claims.get("resource_binding") if isinstance(claims, Mapping) else None
+    if (
+        isinstance(claims, Mapping)
+        and claims.get("schema_version") == ADMISSION_SCHEMA_VERSION
+        and native_dispatch_claims.get("profile") == CUSTOMER_DELETE_PROFILE
+        and native_dispatch_claims.get("counterparty_consent_hash")
+        != (binding.get("counterparty_consent_hash") if isinstance(binding, Mapping) else None)
+    ):
+        raise ValueError("schema5 dispatch consent hash differs from its admitted binding")
+
+
+def _foreign_policy_and_dependency(
+    *,
+    admission: Any,
+    decision: Mapping[str, Any],
+    native_dispatch_claims: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], object] | None:
+    """Bind a native B dispatch to its admitted A proof and policy, if configured."""
+    claims = getattr(admission, "claims", None)
+    binding = claims.get("resource_binding") if isinstance(claims, Mapping) else None
+    dependency_present = "foreign_dependency" in native_dispatch_claims
+    policy_hash = (
+        binding.get("foreign_revocation_policy_hash") if isinstance(binding, Mapping) else None
+    )
+    if policy_hash is None:
+        if dependency_present:
+            raise ValueError("native foreign dependency lacks an admitted policy binding")
+        return None
+    if (
+        not isinstance(claims, Mapping)
+        or claims.get("schema_version") != ADMISSION_SCHEMA_VERSION
+        or native_dispatch_claims.get("profile") != CUSTOMER_DELETE_PROFILE
+        or not _digest(policy_hash)
+        or not isinstance(claims.get("trusted_counterparty_points"), Mapping)
+        or not isinstance(claims.get("credential_trust_roots"), Mapping)
+    ):
+        raise ValueError("native foreign policy admission is invalid")
+    policy = project_foreign_revocation_policy(
+        claims["trusted_counterparty_points"], claims["credential_trust_roots"]
+    )
+    if policy_hash != hash_object(policy):
+        raise ValueError("admitted foreign policy hash differs from signed point configuration")
+    dependency = verify_foreign_dependency(native_dispatch_claims, policy)
+    evidence = decision.get("evidence")
+    foreign = evidence.get("foreign_dispatch") if isinstance(evidence, Mapping) else None
+    hashes = evidence.get("hashes") if isinstance(evidence, Mapping) else None
+    request = evidence.get("request_envelope") if isinstance(evidence, Mapping) else None
+    if dependency is None:
+        if foreign is not None:
+            raise ValueError("ordinary native dispatch retains a foreign A artifact")
+        return policy, None
+    raw_dispatch = dependency.raw_dispatch
+    if (
+        not isinstance(foreign, Mapping)
+        or foreign.get("artifact") != raw_dispatch
+        or not isinstance(hashes, Mapping)
+        or hashes.get("foreign_dispatch_hash") != dependency.dispatch_hash
+        or not isinstance(request, Mapping)
+        or request.get("foreign_dispatch") != raw_dispatch
+    ):
+        raise ValueError("native foreign dependency differs from its retained A artifact")
+    return policy, dependency
+
+
+def _verify_foreign_execution(
+    *,
+    admission: Any,
+    decision: Mapping[str, Any],
+    native_dispatch_claims: Mapping[str, Any],
+    outcome: Mapping[str, Any],
+) -> None:
+    """Verify the mandatory or supplied final A clearance for a native B terminal."""
+    foreign = _foreign_policy_and_dependency(
+        admission=admission,
+        decision=decision,
+        native_dispatch_claims=native_dispatch_claims,
+    )
+    clearance = outcome.get("foreign_revocation_evidence")
+    if foreign is None:
+        if clearance is not None:
+            raise ValueError("ordinary native terminal must not carry foreign revocation evidence")
+        return
+    policy, dependency = foreign
+    if dependency is None:
+        if clearance is not None:
+            raise ValueError("native terminal without a foreign dependency carries clearance")
+        return
+    if outcome.get("status") == "committed" or clearance is not None:
+        verify_foreign_revocation_evidence(
+            clearance,
+            native_dispatch_claims=native_dispatch_claims,
+            policy=policy,
+            terminal_recorded_at=outcome["recorded_at"],
+        )
+
+
 def verify_execution_bundle(
     bundle: Mapping[str, Any],
     *,
@@ -1546,6 +1653,7 @@ def verify_execution_bundle(
             or not isinstance(resource_key, (bytes, str))
         ):
             raise ValueError("operation resource binding or resource id is not admitted")
+        _require_admitted_schema5_consent(admission, claims)
         settlement = _event_for_operation(records, operation_id, "settlement")
         if settlement is None:
             return not_established("operation has no terminal settlement")
@@ -1566,6 +1674,12 @@ def verify_execution_bundle(
             for name in _resource_join_fields(claims.get("profile"))
         ):
             raise ValueError("resource outcome does not join the signed dispatch")
+        _verify_foreign_execution(
+            admission=admission,
+            decision=decision,
+            native_dispatch_claims=claims,
+            outcome=outcome,
+        )
     except (KeyError, TypeError, ValueError, OverflowError) as error:
         return failed("resource_outcome", error)
     checks["resource_outcome"] = "valid"
