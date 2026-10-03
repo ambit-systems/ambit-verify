@@ -45,6 +45,7 @@ CREDENTIAL_KIND_WORKLOAD = "workload"
 
 #: The registration kind that binds one enforcement point's identity.
 ENFORCEMENT_POINT_KIND = "enforcement_point"
+
 #: Characters in a derived enforcement-point id. The audience claim
 #: (claim_shapes._validate_audience) refuses any other length.
 ENFORCEMENT_POINT_ID_LENGTH = 16

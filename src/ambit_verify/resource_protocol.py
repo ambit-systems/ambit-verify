@@ -9,11 +9,14 @@ import base64
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from .consumption import operation_descriptor_hash
 from .hashing import canonical_json_bytes, hash_object, strict_json_loads
+from .tokens_slips import SLIP_CONTEXT_COUNTERPARTY_CONTEXT, parse_counterparty_context
 
 RESOURCE_PROFILE = "record-egress/1"
 GIT_PUBLICATION_PROFILE = "git-publication/1"
@@ -21,6 +24,10 @@ CUSTOMER_DELETE_PROFILE = "customer-delete/1"
 DISPATCH_CONTEXT = b"ambit.resource.dispatch.v1."
 OUTCOME_CONTEXT = b"ambit.resource.outcome.v1."
 RECONCILIATION_CONTEXT = b"ambit.resource.reconciliation.v1."
+COUNTERPARTY_PENDING_ACK_CONTEXT = b"ambit.resource.counterparty-pending-ack.v1."
+COUNTERPARTY_PENDING_ACK_PROFILE = "counterparty_pending_ack/1"
+COUNTERPARTY_CONTEXT_CONTEXT = SLIP_CONTEXT_COUNTERPARTY_CONTEXT
+COUNTERPARTY_CONTEXT_PROFILE = "counterparty_context/1"
 _HEX = frozenset("0123456789abcdef")
 _OPERATION_ID_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
@@ -156,6 +163,74 @@ _BINDING_FIELDS = frozenset(
     }
 )
 _GIT_BINDING_FIELDS = _BINDING_FIELDS | frozenset({"git_remote", "git_ref"})
+_COUNTERPARTY_INGRESS_BINDING_FIELDS = frozenset({"counterparty_ingress_url"})
+
+_COUNTERPARTY_ACK_BASE_FIELDS = frozenset(
+    {
+        "version",
+        "profile",
+        "state",
+        "foreign_dispatch_hash",
+        "foreign_descriptor_hash",
+        "operation_hash",
+        "request_body_hash",
+        "acknowledged_at",
+        "expires_at",
+    }
+)
+_COUNTERPARTY_ACK_APPROVAL_FIELDS = _COUNTERPARTY_ACK_BASE_FIELDS | frozenset(
+    {
+        "counterparty_context_hash",
+        "b_request_fingerprint",
+        "b_escalation_record_hash",
+    }
+)
+
+_COUNTERPARTY_CONTEXT_FIELDS = frozenset(
+    {
+        "version",
+        "trust_root_id",
+        "profile",
+        "foreign_dispatch_hash",
+        "foreign_descriptor_hash",
+        "operation_hash",
+        "request_body_hash",
+        "destination_hash",
+        "consent_hash",
+        "justification",
+        "issued_at",
+        "expires_at",
+    }
+)
+_COUNTERPARTY_FOREIGN_DESCRIPTOR_FIELDS = _CUSTOMER_DELETE_DISPATCH_FIELDS
+
+
+def validate_counterparty_ingress_url(value: object) -> str:
+    """Return an unambiguous absolute HTTP(S) transport destination or raise."""
+    if not isinstance(value, str):
+        raise ValueError(
+            "counterparty_ingress_url must be an absolute HTTP(S) URL without userinfo or fragment"
+        )
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError(
+            "counterparty_ingress_url must be an absolute HTTP(S) URL without userinfo or fragment"
+        ) from error
+    if (
+        value != value.strip()
+        or parsed.scheme not in {"http", "https"}
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or (port is not None and not 0 < port <= 65535)
+    ):
+        raise ValueError(
+            "counterparty_ingress_url must be an absolute HTTP(S) URL without userinfo or fragment"
+        )
+    return value
 
 
 def _text(value: object, name: str) -> str:
@@ -233,10 +308,14 @@ def resource_binding_hash(binding: Mapping[str, Any]) -> str:
     value = _canonical_object(binding, name="resource binding")
     profile = value.get("outcome_profile")
     expected_fields = _GIT_BINDING_FIELDS if profile == GIT_PUBLICATION_PROFILE else _BINDING_FIELDS
+    if "counterparty_ingress_url" in value:
+        expected_fields |= _COUNTERPARTY_INGRESS_BINDING_FIELDS
     if set(value) != expected_fields:
         raise ValueError("resource binding fields are invalid")
     for name in ("adapter_id", "downstream_url", "downstream_path"):
         _text(value.get(name), f"resource binding {name}")
+    if "counterparty_ingress_url" in value:
+        validate_counterparty_ingress_url(value["counterparty_ingress_url"])
     _digest(value.get("receipt_public_key"), "resource binding receipt_public_key")
     public_key = value.get("outcome_public_key")
     if profile is None and public_key is None:
@@ -436,6 +515,339 @@ def _dispatch_claims(value: Mapping[str, Any]) -> dict[str, Any]:
         _revocation_identity(claims)
     if "max_revocation_age_ms" in claims:
         _dispatch_max_revocation_age(claims)
+    return claims
+
+
+def counterparty_foreign_descriptor(dispatch_claims: Mapping[str, Any]) -> dict[str, Any]:
+    """Extract the immutable customer-delete dispatch descriptor for a counterparty ACK."""
+    claims = _dispatch_claims(dispatch_claims)
+    if claims["profile"] != CUSTOMER_DELETE_PROFILE:
+        raise ValueError("counterparty dispatch must use the customer-delete profile")
+    return {name: claims[name] for name in _COUNTERPARTY_FOREIGN_DESCRIPTOR_FIELDS}
+
+
+def counterparty_foreign_descriptor_hash(dispatch_claims: Mapping[str, Any]) -> str:
+    """Hash the strict immutable descriptor extracted from one A dispatch."""
+    return hash_object(counterparty_foreign_descriptor(dispatch_claims))
+
+
+def counterparty_operation_hash(operation: object) -> str:
+    """Hash one strict frozen A operation descriptor for a counterparty ACK."""
+    return operation_descriptor_hash(operation)
+
+
+def counterparty_destination_hash(
+    *,
+    domain_id: str,
+    ledger_id: str,
+    enforcement_point_id: str,
+    resource_binding_hash: str,
+) -> str:
+    """Hash the exact admitted B door identity for one foreign context."""
+    return hash_object(
+        {
+            "domain_id": _text(domain_id, "counterparty destination domain_id"),
+            "ledger_id": _text(ledger_id, "counterparty destination ledger_id"),
+            "enforcement_point_id": _text(
+                enforcement_point_id, "counterparty destination enforcement_point_id"
+            ),
+            "resource_binding_hash": _digest(
+                resource_binding_hash, "counterparty destination resource_binding_hash"
+            ),
+        }
+    )
+
+
+def counterparty_consent_hash(
+    *, delegation_token: str, parent_delegation_tokens: Sequence[str]
+) -> str:
+    """Hash the exact configured counterparty consent delegation chain."""
+    if isinstance(parent_delegation_tokens, (str, bytes)):
+        raise ValueError("counterparty consent parent delegation tokens are invalid")
+    parents = [
+        _text(token, "counterparty consent parent delegation token")
+        for token in parent_delegation_tokens
+    ]
+    return hash_object(
+        {
+            "delegation_token": _text(delegation_token, "counterparty consent delegation token"),
+            "parent_delegation_tokens": parents,
+        }
+    )
+
+
+def _counterparty_pending_ack_claims(value: Mapping[str, Any]) -> dict[str, Any]:
+    copied = _canonical_object(value, name="counterparty pending acknowledgment claims")
+    state = copied.get("state")
+    if state == "awaiting_review":
+        fields = _COUNTERPARTY_ACK_BASE_FIELDS
+    elif state == "awaiting_approval":
+        fields = _COUNTERPARTY_ACK_APPROVAL_FIELDS
+    else:
+        raise ValueError("counterparty pending acknowledgment state is invalid")
+    if set(copied) != fields:
+        raise ValueError("counterparty pending acknowledgment claim fields are invalid")
+    if copied.get("version") != 1 or copied.get("profile") != COUNTERPARTY_PENDING_ACK_PROFILE:
+        raise ValueError("counterparty pending acknowledgment version or profile is invalid")
+    for name in (
+        "foreign_dispatch_hash",
+        "foreign_descriptor_hash",
+        "operation_hash",
+        "request_body_hash",
+    ):
+        _digest(copied.get(name), f"counterparty pending acknowledgment {name}")
+    if state == "awaiting_approval":
+        for name in (
+            "counterparty_context_hash",
+            "b_request_fingerprint",
+            "b_escalation_record_hash",
+        ):
+            _digest(copied.get(name), f"counterparty pending acknowledgment {name}")
+    acknowledged_at = _time(
+        copied.get("acknowledged_at"), "counterparty pending acknowledgment acknowledged_at"
+    )
+    expires_at = _time(copied.get("expires_at"), "counterparty pending acknowledgment expires_at")
+    if expires_at <= acknowledged_at:
+        raise ValueError("counterparty pending acknowledgment expiry is invalid")
+    return copied
+
+
+def counterparty_pending_ack_message(claims: Mapping[str, Any]) -> bytes:
+    """Return strict context-separated B outcome-key ACK bytes for private signing."""
+    return COUNTERPARTY_PENDING_ACK_CONTEXT + canonical_json_bytes(
+        _counterparty_pending_ack_claims(claims)
+    )
+
+
+def verify_counterparty_pending_ack(
+    token: str,
+    *,
+    public_key: bytes | str,
+    expected_state: str,
+    expected_foreign_dispatch_hash: str,
+    expected_foreign_descriptor_hash: str,
+    expected_operation_hash: str,
+    expected_request_body_hash: str,
+    expected_dispatch_not_after: datetime,
+    at: datetime,
+    expected_counterparty_context_hash: str | None = None,
+    expected_b_request_fingerprint: str | None = None,
+    expected_b_escalation_record_hash: str | None = None,
+) -> dict[str, Any]:
+    """Verify one B outcome-key ACK against one frozen A dispatch and lifecycle state."""
+    if expected_state not in {"awaiting_review", "awaiting_approval"}:
+        raise ValueError("expected counterparty pending acknowledgment state is invalid")
+    for value, name in (
+        (expected_foreign_dispatch_hash, "expected foreign dispatch hash"),
+        (expected_foreign_descriptor_hash, "expected foreign descriptor hash"),
+        (expected_operation_hash, "expected operation hash"),
+        (expected_request_body_hash, "expected request body hash"),
+    ):
+        _digest(value, name)
+    if not isinstance(at, datetime) or at.tzinfo is None or at.utcoffset() is None:
+        raise ValueError("counterparty pending acknowledgment verification time is invalid")
+    if (
+        not isinstance(expected_dispatch_not_after, datetime)
+        or expected_dispatch_not_after.tzinfo is None
+        or expected_dispatch_not_after.utcoffset() is None
+    ):
+        raise ValueError("counterparty dispatch expiry is invalid")
+    approval_values = (
+        (expected_counterparty_context_hash, "expected counterparty context hash"),
+        (expected_b_request_fingerprint, "expected B request fingerprint"),
+        (expected_b_escalation_record_hash, "expected B escalation record hash"),
+    )
+    if expected_state == "awaiting_review":
+        if any(value is not None for value, _ in approval_values):
+            raise ValueError("review acknowledgment must not carry approval expectations")
+    elif (
+        expected_counterparty_context_hash is None
+        or expected_b_request_fingerprint is None
+        or expected_b_escalation_record_hash is None
+    ):
+        raise ValueError("approval acknowledgment requires every approval expectation")
+    else:
+        for approval_value, approval_name in approval_values:
+            _digest(approval_value, approval_name)
+    claims = _verify(
+        token,
+        public_key=public_key,
+        message=counterparty_pending_ack_message,
+        parser=_counterparty_pending_ack_claims,
+    )
+    if claims["state"] != expected_state:
+        raise ValueError("counterparty pending acknowledgment state does not match")
+    for name, expected in (
+        ("foreign_dispatch_hash", expected_foreign_dispatch_hash),
+        ("foreign_descriptor_hash", expected_foreign_descriptor_hash),
+        ("operation_hash", expected_operation_hash),
+        ("request_body_hash", expected_request_body_hash),
+    ):
+        if claims[name] != expected:
+            raise ValueError(f"counterparty pending acknowledgment {name} does not match")
+    if expected_state == "awaiting_approval":
+        if claims["counterparty_context_hash"] != expected_counterparty_context_hash:
+            raise ValueError("counterparty pending acknowledgment context hash does not match")
+        if claims["b_request_fingerprint"] != expected_b_request_fingerprint:
+            raise ValueError(
+                "counterparty pending acknowledgment request fingerprint does not match"
+            )
+        if claims["b_escalation_record_hash"] != expected_b_escalation_record_hash:
+            raise ValueError(
+                "counterparty pending acknowledgment escalation record hash does not match"
+            )
+    verified_at = at.astimezone(UTC)
+    expires_at = _time(claims["expires_at"], "counterparty pending acknowledgment expires_at")
+    if (
+        not _time(claims["acknowledged_at"], "counterparty pending acknowledgment acknowledged_at")
+        <= verified_at
+        < expires_at
+    ):
+        raise ValueError("counterparty pending acknowledgment is not active")
+    if expires_at > expected_dispatch_not_after.astimezone(UTC):
+        raise ValueError("counterparty pending acknowledgment exceeds dispatch expiry")
+    return claims
+
+
+def counterparty_pending_ack_approval_expectations(
+    token: str,
+    *,
+    public_key: bytes | str,
+    expected_foreign_dispatch_hash: str,
+    expected_foreign_descriptor_hash: str,
+    expected_operation_hash: str,
+    expected_request_body_hash: str,
+    expected_dispatch_not_after: datetime,
+    at: datetime,
+) -> dict[str, str]:
+    """Return verified B approval-stage joins for independently retained preflight proof."""
+    for value, name in (
+        (expected_foreign_dispatch_hash, "expected foreign dispatch hash"),
+        (expected_foreign_descriptor_hash, "expected foreign descriptor hash"),
+        (expected_operation_hash, "expected operation hash"),
+        (expected_request_body_hash, "expected request body hash"),
+    ):
+        _digest(value, name)
+    if (
+        not isinstance(at, datetime)
+        or at.tzinfo is None
+        or at.utcoffset() is None
+        or not isinstance(expected_dispatch_not_after, datetime)
+        or expected_dispatch_not_after.tzinfo is None
+        or expected_dispatch_not_after.utcoffset() is None
+    ):
+        raise ValueError("counterparty pending acknowledgment verification time is invalid")
+    claims = _verify(
+        token,
+        public_key=public_key,
+        message=counterparty_pending_ack_message,
+        parser=_counterparty_pending_ack_claims,
+    )
+    if claims["state"] != "awaiting_approval":
+        raise ValueError("counterparty pending acknowledgment is not awaiting approval")
+    for name, expected in (
+        ("foreign_dispatch_hash", expected_foreign_dispatch_hash),
+        ("foreign_descriptor_hash", expected_foreign_descriptor_hash),
+        ("operation_hash", expected_operation_hash),
+        ("request_body_hash", expected_request_body_hash),
+    ):
+        if claims[name] != expected:
+            raise ValueError(f"counterparty pending acknowledgment {name} does not match")
+    verified_at = at.astimezone(UTC)
+    expires_at = _time(claims["expires_at"], "counterparty pending acknowledgment expires_at")
+    if (
+        not _time(claims["acknowledged_at"], "counterparty pending acknowledgment acknowledged_at")
+        <= verified_at
+        < expires_at
+    ):
+        raise ValueError("counterparty pending acknowledgment is not active")
+    if expires_at > expected_dispatch_not_after.astimezone(UTC):
+        raise ValueError("counterparty pending acknowledgment exceeds dispatch expiry")
+    return {
+        name: str(claims[name])
+        for name in (
+            "counterparty_context_hash",
+            "b_request_fingerprint",
+            "b_escalation_record_hash",
+        )
+    }
+
+
+def _counterparty_context_claims(value: Mapping[str, Any]) -> dict[str, Any]:
+    copied = _canonical_object(value, name="counterparty context claims")
+    if set(copied) != _COUNTERPARTY_CONTEXT_FIELDS:
+        raise ValueError("counterparty context claim fields are invalid")
+    if copied.get("version") != 1 or copied.get("profile") != COUNTERPARTY_CONTEXT_PROFILE:
+        raise ValueError("counterparty context version or profile is invalid")
+    _text(copied.get("trust_root_id"), "counterparty context trust_root_id")
+    for name in (
+        "foreign_dispatch_hash",
+        "foreign_descriptor_hash",
+        "operation_hash",
+        "request_body_hash",
+        "destination_hash",
+        "consent_hash",
+    ):
+        _digest(copied.get(name), f"counterparty context {name}")
+    _text(copied.get("justification"), "counterparty context justification")
+    issued_at = _time(copied.get("issued_at"), "counterparty context issued_at")
+    expires_at = _time(copied.get("expires_at"), "counterparty context expires_at")
+    if expires_at <= issued_at:
+        raise ValueError("counterparty context expiry is invalid")
+    return copied
+
+
+def verify_counterparty_context(
+    token: str,
+    *,
+    trust_roots: Mapping[str, Any],
+    expected_foreign_dispatch_hash: str,
+    expected_foreign_descriptor_hash: str,
+    expected_operation_hash: str,
+    expected_request_body_hash: str,
+    expected_destination_hash: str,
+    expected_consent_hash: str,
+    expected_justification: str,
+    expected_dispatch_not_after: datetime,
+    at: datetime,
+) -> dict[str, Any]:
+    """Verify a context-authority artifact using its independently admitted key."""
+    expected = {
+        "foreign_dispatch_hash": expected_foreign_dispatch_hash,
+        "foreign_descriptor_hash": expected_foreign_descriptor_hash,
+        "operation_hash": expected_operation_hash,
+        "request_body_hash": expected_request_body_hash,
+        "destination_hash": expected_destination_hash,
+        "consent_hash": expected_consent_hash,
+    }
+    for value in expected.values():
+        _digest(value, "expected counterparty context digest")
+    _text(expected_justification, "expected counterparty context justification")
+    if (
+        not isinstance(at, datetime)
+        or at.tzinfo is None
+        or at.utcoffset() is None
+        or not isinstance(expected_dispatch_not_after, datetime)
+        or expected_dispatch_not_after.tzinfo is None
+        or expected_dispatch_not_after.utcoffset() is None
+    ):
+        raise ValueError("counterparty context verification time is invalid")
+    if not isinstance(trust_roots, Mapping) or len(trust_roots) != 1:
+        raise ValueError("counterparty context authority must be one explicitly admitted root")
+    valid, raw_claims = parse_counterparty_context(token, trust_roots=trust_roots)
+    if not valid or raw_claims is None:
+        raise ValueError("counterparty context signature does not verify")
+    claims = _counterparty_context_claims(raw_claims)
+    if any(claims[name] != value for name, value in expected.items()):
+        raise ValueError("counterparty context does not match the frozen operation")
+    if claims["justification"] != expected_justification:
+        raise ValueError("counterparty context justification does not match")
+    issued_at = _time(claims["issued_at"], "counterparty context issued_at")
+    expires_at = _time(claims["expires_at"], "counterparty context expires_at")
+    if not issued_at <= at.astimezone(UTC) < expires_at:
+        raise ValueError("counterparty context is not active")
+    if expires_at > expected_dispatch_not_after.astimezone(UTC):
+        raise ValueError("counterparty context exceeds dispatch expiry")
     return claims
 
 
@@ -706,12 +1118,23 @@ def verify_reconciliation(token: str, *, public_key: bytes | str) -> dict[str, A
 
 
 __all__ = [
+    "COUNTERPARTY_CONTEXT_CONTEXT",
+    "COUNTERPARTY_CONTEXT_PROFILE",
+    "COUNTERPARTY_PENDING_ACK_CONTEXT",
+    "COUNTERPARTY_PENDING_ACK_PROFILE",
     "CUSTOMER_DELETE_PROFILE",
     "DISPATCH_CONTEXT",
     "GIT_PUBLICATION_PROFILE",
     "OUTCOME_CONTEXT",
     "RECONCILIATION_CONTEXT",
     "RESOURCE_PROFILE",
+    "counterparty_consent_hash",
+    "counterparty_destination_hash",
+    "counterparty_foreign_descriptor",
+    "counterparty_foreign_descriptor_hash",
+    "counterparty_operation_hash",
+    "counterparty_pending_ack_approval_expectations",
+    "counterparty_pending_ack_message",
     "dispatch_message",
     "git_publication_plan_hash",
     "git_ref_is_covered",
@@ -719,6 +1142,9 @@ __all__ = [
     "payload_bytes",
     "reconciliation_message",
     "resource_binding_hash",
+    "validate_counterparty_ingress_url",
+    "verify_counterparty_context",
+    "verify_counterparty_pending_ack",
     "verify_dispatch",
     "verify_reconciliation",
     "verify_resource_outcome",

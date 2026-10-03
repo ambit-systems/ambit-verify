@@ -14,18 +14,25 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .actor_proof import actor_proof_request_hash, verify_actor_proof
-from .admission import verify_authority_admission, verify_execution_authority
+from .admission import (
+    verify_authority_admission,
+    verify_execution_authority,
+    verify_foreign_dispatch,
+)
 from .consumption import required_account_bounds, validate_consumption_record
 from .credential_registration import verify_enforcement_point_registration
-from .hashing import canonical_json_bytes, hash_object
+from .hashing import canonical_json_bytes, hash_object, sha256_hex
 from .head_attestation import ATTESTATION_BLOCK_KEYS, HeadAttestation
 from .head_attestation_ed25519 import Ed25519HeadVerifier
 from .resource_protocol import (
     CUSTOMER_DELETE_PROFILE,
+    counterparty_foreign_descriptor_hash,
+    counterparty_operation_hash,
     git_publication_plan_hash,
     git_ref_is_covered,
     payload_bytes,
     resource_binding_hash,
+    verify_counterparty_pending_ack,
     verify_dispatch,
     verify_resource_outcome,
 )
@@ -602,42 +609,55 @@ def _expected_consumed_facts(
         source = decision
     if not isinstance(evidence, Mapping):
         raise ValueError("authorized decision lacks retained evidence")
-    proof = evidence.get("actor_proof")
     request = evidence.get("request_envelope")
-    actor_id = source.get("actor_id")
-    if (
-        not isinstance(proof, Mapping)
-        or not isinstance(request, Mapping)
-        or not isinstance(actor_id, str)
-    ):
-        raise ValueError("authorized decision lacks retained holder proof/preimage")
-    authorized_at = _moment(source.get("evaluated_at"))
-    request_hash = actor_proof_request_hash(request)
-    holder = verify_actor_proof(
-        {"actor_id": actor_id, "actor_proof": proof},
-        admission.claims["credential_trust_roots"],
-        request_hash=request_hash,
-        audience=str(admission.claims["ledger_id"]),
-        now=authorized_at,
-        freshness_seconds=int(admission.claims["max_actor_proof_age_seconds"]),
-        registration_public_keys=admission.claims["credential_registration_public_keys"],
-    )
-    if not holder.valid or holder.key_fingerprint is None or holder.nonce is None:
-        raise ValueError("authorized decision holder proof is invalid")
-    issued = _moment(proof.get("issued_at"))
-    facts = {
-        (
-            "actor_nonce",
-            canonical_json_bytes(
-                {
-                    "ledger_id": admission.claims["ledger_id"],
-                    "key_fingerprint": holder.key_fingerprint,
-                    "nonce": holder.nonce,
-                }
-            ).decode("utf-8"),
-            issued + timedelta(seconds=int(admission.claims["max_actor_proof_age_seconds"])),
+    foreign_present = evidence.get("foreign_dispatch") is not None
+    if foreign_present:
+        foreign = verify_foreign_dispatch(
+            decision,
+            admission=admission,
+            at=_moment(source.get("evaluated_at")),
         )
-    }
+        if not foreign.valid or foreign.dispatch_hash is None or foreign.not_after is None:
+            raise ValueError(
+                "; ".join(foreign.errors) or "authorized decision foreign dispatch is invalid"
+            )
+        facts = {("foreign_dispatch", foreign.dispatch_hash, foreign.not_after)}
+    else:
+        proof = evidence.get("actor_proof")
+        actor_id = source.get("actor_id")
+        if (
+            not isinstance(proof, Mapping)
+            or not isinstance(request, Mapping)
+            or not isinstance(actor_id, str)
+        ):
+            raise ValueError("authorized decision lacks retained holder proof/preimage")
+        authorized_at = _moment(source.get("evaluated_at"))
+        request_hash = actor_proof_request_hash(request)
+        holder = verify_actor_proof(
+            {"actor_id": actor_id, "actor_proof": proof},
+            admission.claims["credential_trust_roots"],
+            request_hash=request_hash,
+            audience=str(admission.claims["ledger_id"]),
+            now=authorized_at,
+            freshness_seconds=int(admission.claims["max_actor_proof_age_seconds"]),
+            registration_public_keys=admission.claims["credential_registration_public_keys"],
+        )
+        if not holder.valid or holder.key_fingerprint is None or holder.nonce is None:
+            raise ValueError("authorized decision holder proof is invalid")
+        issued = _moment(proof.get("issued_at"))
+        facts = {
+            (
+                "actor_nonce",
+                canonical_json_bytes(
+                    {
+                        "ledger_id": admission.claims["ledger_id"],
+                        "key_fingerprint": holder.key_fingerprint,
+                        "nonce": holder.nonce,
+                    }
+                ).decode("utf-8"),
+                issued + timedelta(seconds=int(admission.claims["max_actor_proof_age_seconds"])),
+            )
+        }
     approval = decision.get("approval")
     approval_evidence = (
         approval.get("credential_evidence") if isinstance(approval, Mapping) else None
@@ -728,6 +748,9 @@ def _replay_prefix(
     operation_states: dict[str, str] = {}
     reservations: dict[str, tuple[tuple[Any, ...], int, str, str]] = {}
     fences: dict[str, Mapping[str, Any]] = {}
+    pending: dict[str, Mapping[str, Any]] = {}
+    resume_authentications: dict[str, Mapping[str, Any]] = {}
+    consumed_resume_authentication_hashes: set[str] = set()
     operation_reservations: dict[str, list[str]] = {}
     charged: dict[tuple[Any, ...], tuple[int, int]] = {}
     consumed: dict[tuple[str, str], datetime] = {}
@@ -969,6 +992,11 @@ def _replay_prefix(
             }
             if declared_auth_facts != expected_auth_fact:
                 raise ValueError("authentication consumed identifiers differ from its holder proof")
+            if record.get("authentication_kind") == "counterparty_resume":
+                record_hash = record.get("record_hash")
+                if not isinstance(record_hash, str):
+                    raise ValueError("counterparty resume authentication lacks a record hash")
+                resume_authentications[record_hash] = record
             continue
         operation_id = operation["operation_id"]
         decision = decisions.get(operation_id)
@@ -1026,6 +1054,148 @@ def _replay_prefix(
                     raise ValueError("dispatch fence repeats a reservation transition")
                 reservations[reservation] = (key, amount, owner, "fenced")
             fences[operation_id] = record
+            continue
+        if event in {"counterparty_pending", "counterparty_resume_fenced"}:
+            fence = fences.get(operation_id)
+            if fence is None:
+                raise ValueError("counterparty lifecycle lacks its original dispatch fence")
+            immutable = (
+                "decision_hash",
+                "intent_hash",
+                "dispatch_token",
+                "dispatch_claims",
+                "foreign_dispatch_hash",
+                "foreign_descriptor_hash",
+                "operation_hash",
+                "request_body",
+                "request_body_hash",
+            )
+            previous = pending.get(operation_id)
+            if event == "counterparty_pending":
+                if operation_states.get(operation_id) != "fenced":
+                    raise ValueError("counterparty pending does not follow a dispatch fence")
+                if any(record.get(name) != fence.get(name) for name in immutable[:4]):
+                    raise ValueError("counterparty pending changes its frozen A dispatch")
+            else:
+                if (
+                    operation_states.get(operation_id) != "pending"
+                    or previous is None
+                    or record.get("pending_hash") != previous.get("record_hash")
+                ):
+                    raise ValueError("counterparty resume does not join a pending transition")
+                if any(record.get(name) != previous.get(name) for name in immutable):
+                    raise ValueError("counterparty resume changes its frozen A transport")
+                resume_authentication_hash = record.get("resume_authentication_hash")
+                if not isinstance(resume_authentication_hash, str):
+                    raise ValueError("counterparty resume lacks an authentication hash")
+                if resume_authentication_hash in consumed_resume_authentication_hashes:
+                    raise ValueError("counterparty resume reuses an authentication record")
+                resume_authentication = resume_authentications.get(resume_authentication_hash)
+                resume_request = (
+                    resume_authentication.get("request")
+                    if isinstance(resume_authentication, Mapping)
+                    else None
+                )
+                if (
+                    not isinstance(resume_authentication, Mapping)
+                    or resume_authentication.get("seq", 0) >= record.get("seq", 0)
+                    or resume_authentication.get("operation") != operation
+                    or not isinstance(resume_request, Mapping)
+                    or set(resume_request)
+                    != {
+                        "request_kind",
+                        "operation_id",
+                        "original_request_hash",
+                        "actor",
+                        "counterparty_context",
+                        "counterparty_approval",
+                        "counterparty_pending_ack",
+                    }
+                    or resume_request.get("request_kind") != "counterparty_resume"
+                    or resume_request.get("operation_id") != operation_id
+                    or resume_request.get("original_request_hash") != operation.get("request_hash")
+                    or resume_request.get("counterparty_pending_ack") != record.get("pending_ack")
+                    or not isinstance(resume_request.get("counterparty_context"), str)
+                    or not resume_request["counterparty_context"]
+                    or sha256_hex(resume_request["counterparty_context"].encode("utf-8"))
+                    != record.get("counterparty_context_hash")
+                    or not isinstance(resume_request.get("counterparty_approval"), str)
+                    or not resume_request["counterparty_approval"]
+                ):
+                    raise ValueError("counterparty resume lacks its authenticated request")
+            claims = record.get("dispatch_claims")
+            if not isinstance(claims, Mapping):
+                raise ValueError("counterparty lifecycle dispatch claims are invalid")
+            foreign_descriptor_hash = counterparty_foreign_descriptor_hash(claims)
+            operation_hash = counterparty_operation_hash(operation)
+            if (
+                record.get("foreign_descriptor_hash") != foreign_descriptor_hash
+                or record.get("operation_hash") != operation_hash
+            ):
+                raise ValueError("counterparty lifecycle hashes do not join the frozen dispatch")
+            evidence = decision.get("evidence")
+            admission_evidence = (
+                evidence.get("authority_admission") if isinstance(evidence, Mapping) else None
+            )
+            admission_token = (
+                admission_evidence.get("artifact")
+                if isinstance(admission_evidence, Mapping)
+                else None
+            )
+            source: Mapping[str, Any] = decision
+            retained = decision.get("decision")
+            if isinstance(retained, Mapping):
+                source = retained
+            admission = (
+                verify_authority_admission(
+                    admission_token,
+                    admission_trust_roots=_adapter_roots(
+                        decision, admission_trust_roots_by_adapter
+                    ),
+                    expected_domain=expected_domain,
+                    expected_ledger_id=expected_ledger_id,
+                    at=_moment(source.get("evaluated_at")),
+                ).admission
+                if isinstance(admission_token, str)
+                else None
+            )
+            binding = admission.claims.get("resource_binding") if admission is not None else None
+            outcome_key = (
+                binding.get("outcome_public_key") if isinstance(binding, Mapping) else None
+            )
+            if not isinstance(outcome_key, (str, bytes)):
+                raise ValueError("counterparty lifecycle lacks an admitted B outcome key")
+            expected = {
+                "public_key": outcome_key,
+                "expected_state": (
+                    "awaiting_review" if event == "counterparty_pending" else "awaiting_approval"
+                ),
+                "expected_foreign_dispatch_hash": record["foreign_dispatch_hash"],
+                "expected_foreign_descriptor_hash": record["foreign_descriptor_hash"],
+                "expected_operation_hash": record["operation_hash"],
+                "expected_request_body_hash": record["request_body_hash"],
+                "expected_dispatch_not_after": _moment(claims["not_after"]),
+                "at": _moment(record["evaluated_at"]),
+            }
+            if event == "counterparty_resume_fenced":
+                expected.update(
+                    {
+                        "expected_counterparty_context_hash": record["counterparty_context_hash"],
+                        "expected_b_request_fingerprint": record["b_request_fingerprint"],
+                        "expected_b_escalation_record_hash": record["b_escalation_record_hash"],
+                    }
+                )
+            verify_counterparty_pending_ack(record["pending_ack"], **expected)
+            if event == "counterparty_resume_fenced":
+                if not isinstance(resume_authentication_hash, str):
+                    raise ValueError("counterparty resume lacks an authentication hash")
+                consumed_resume_authentication_hashes.add(resume_authentication_hash)
+            if event == "counterparty_pending":
+                operation_states[operation_id] = "pending"
+                pending[operation_id] = record
+            else:
+                operation_states[operation_id] = "fenced"
+                del pending[operation_id]
             continue
         if event == "settlement":
             status = record["status"]

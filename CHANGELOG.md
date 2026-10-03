@@ -33,6 +33,32 @@ follows [Semantic Versioning](https://semver.org/).
 - A regression test proves `verify_admitted_path` refuses an otherwise-valid
   two-hop admitted path whose child delegation is signed under a different
   credential root than the admitted origin grant.
+- Resource bindings may now include an optional
+  `counterparty_ingress_url`: a validated absolute HTTP(S) transport URL
+  without userinfo or fragment. The exact value is included in the
+  `resource_binding_hash`; absent fields retain the prior binding hash.
+- Admission schema 4 carries a required signed
+  `trusted_counterparty_points` map (empty for ordinary admissions). Each
+  admitted point binds its A domain, ledger, resource id, resource-binding
+  hash, enforcement-point id, Ed25519 key, revocation roots and freshness
+  bound, plus B's signed consent chain. Historical schema 1–3 validation
+  remains unchanged; schema 4 supports the existing record-egress,
+  customer-delete, and Git resource bindings.
+- `verify_foreign_dispatch` and execution-bundle replay verify retained
+  foreign customer-delete dispatches only against B's verified schema-4
+  admission. They bind the raw dispatch digest, admitted point snapshot,
+  A resource binding, foreign signed revocation statuses, canonical B
+  request/action/payload, B-consent subject and actor-key fingerprint. The
+  replayed consumed fact is `foreign_dispatch` keyed by the raw dispatch
+  SHA-256 through A's `not_after`.
+- Foreign B execution now requires a raw signed `counterparty_context/1`
+  artifact, bound to the canonical B request, destination, consent, and native
+  justification under the signed B-point-selected existing approval root; a
+  context digest alone is insufficient.
+- Counterparty resumes retain the B awaiting-approval acknowledgment joins and
+  a single-use reference to the preceding authenticated `counterparty_resume`
+  request, which binds the exact pending acknowledgment, raw context, and B
+  approval token.
 
 ### Changed
 

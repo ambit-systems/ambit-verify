@@ -447,15 +447,16 @@ def verify_receipt_credentials(
     escalation_record: Mapping[str, Any] | None,
     audience: str | None = None,
     admission_trust_roots: Mapping[str, Any] | None = None,
+    foreign_admission: Any | None = None,
 ) -> ReceiptCredentialVerification:
     """Verify retained credentials without trusting recorded validity flags.
 
     v3/v4 preserve their historical optional-absence meaning when they carry
     no execution profile. A profile explicitly marked ``simulation`` or
     ``nonconsequential`` remains a non-live record; a profile marked ``live``
-    and every v5/v6 receipt must retain a holder proof. This prevents a live
-    producer from silently downgrading a missing proof into a historical
-    contract.
+    and every v5/v6 receipt must retain a holder proof. A caller that supplies
+    B's verified schema-4 admission through ``foreign_admission`` may instead
+    establish the explicit foreign-dispatch path under B's admitted point map.
 
     Pass the referenced record for an approval-bearing receipt. Pass ``None``
     explicitly only when the receipt carries no approval credential. P-256
@@ -481,30 +482,46 @@ def verify_receipt_credentials(
     if schema_version not in SUPPORTED_EVIDENCE_SCHEMA_VERSIONS:
         return _unverified("unsupported evidence schema version")
     execution_profile = evidence.get("execution_profile")
-    proof_required = schema_version in {"5", "6"} or execution_profile == "live"
-    if proof_required and not isinstance(evidence.get("actor_proof"), Mapping):
-        return _unverified(
-            f"schema-v{schema_version} live evidence requires a retained actor proof"
-        )
     if execution_profile is not None and execution_profile not in {
         "live",
         "simulation",
         "nonconsequential",
     }:
         return _unverified("evidence execution profile is unsupported")
-
     try:
         evaluated_at = _evaluation_time(receipt)
     except (TypeError, ValueError) as exc:
         return _unverified(str(exc))
+    foreign_dispatch_verified = False
+    if evidence.get("foreign_dispatch") is not None and foreign_admission is not None:
+        from .admission import verify_foreign_dispatch
 
-    actor_proof_valid = _verify_retained_actor_proof(
-        receipt,
-        trust_roots,
-        registration_public_keys=registration_public_keys,
-        audience=audience,
-        evaluated_at=evaluated_at,
-        errors=errors,
+        foreign_dispatch_verified = verify_foreign_dispatch(
+            receipt, admission=foreign_admission, at=evaluated_at
+        ).valid
+        if not foreign_dispatch_verified:
+            return _unverified("foreign dispatch evidence does not verify under admitted trust")
+    proof_required = (
+        schema_version in {"5", "6"} or execution_profile == "live"
+    ) and not foreign_dispatch_verified
+    if proof_required and not isinstance(evidence.get("actor_proof"), Mapping):
+        return _unverified(
+            f"schema-v{schema_version} live evidence requires a retained actor proof"
+        )
+    if foreign_dispatch_verified and evidence.get("actor_proof") is not None:
+        return _unverified("foreign dispatch receipt must not retain an actor proof")
+
+    actor_proof_valid = (
+        True
+        if foreign_dispatch_verified
+        else _verify_retained_actor_proof(
+            receipt,
+            trust_roots,
+            registration_public_keys=registration_public_keys,
+            audience=audience,
+            evaluated_at=evaluated_at,
+            errors=errors,
+        )
     )
 
     delegation_valid = _verify_delegation(

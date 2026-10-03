@@ -61,6 +61,7 @@ SLIP_CONTEXT_APPROVAL = "ambit.slip.approval.v1"
 SLIP_CONTEXT_RATIFICATION = "ambit.slip.ratification.v1"
 SLIP_CONTEXT_CHANGE = "ambit.slip.change.v1"
 SLIP_CONTEXT_REVOCATION = "ambit.slip.revocation.v1"
+SLIP_CONTEXT_COUNTERPARTY_CONTEXT = "ambit.slip.counterparty-context.v1"
 # An enforcement point signs its own registration record under this context to
 # prove it holds the private half of the key that signs its ledger head. The
 # separation keeps that signature from validating as any slip, and keeps a slip
@@ -299,15 +300,29 @@ def parse_approval(
         return False, None
 
 
+def parse_counterparty_context(
+    token: str, *, trust_roots: Mapping[str, Any] | None = None
+) -> tuple[bool, dict[str, Any] | None]:
+    """Verify a B context-purpose slip under its explicitly admitted approval authority."""
+    return _verify_slip(
+        token,
+        trust_roots,
+        context=SLIP_CONTEXT_COUNTERPARTY_CONTEXT,
+        allowed_schemes=frozenset({"ed25519", "p256"}),
+    )
+
+
 __all__ = [
     "ENFORCEMENT_POINT_REGISTRATION_CONTEXT",
     "REVOCATION_SET_CONTEXT",
     "SLIP_CONTEXT_APPROVAL",
     "SLIP_CONTEXT_CHANGE",
+    "SLIP_CONTEXT_COUNTERPARTY_CONTEXT",
     "SLIP_CONTEXT_DELEGATION",
     "SLIP_CONTEXT_RATIFICATION",
     "SLIP_CONTEXT_REVOCATION",
     "parse_approval",
+    "parse_counterparty_context",
     "parse_delegation",
     "verified_slip_scheme",
     "verified_slip_trust_root_id",

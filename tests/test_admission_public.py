@@ -18,6 +18,7 @@ from ambit_verify import (
     canonical_json_bytes,
     verify_admitted_origin,
     verify_authority_admission,
+    verify_foreign_dispatch,
     verify_receipt_credentials,
 )
 
@@ -229,3 +230,93 @@ def test_historical_optional_absence_is_distinct_from_malformed_evidence() -> No
     )
     assert not malformed.valid
     assert any("artifact missing" in error for error in malformed.errors)
+
+
+def test_schema4_admits_only_normalized_signed_counterparty_points() -> None:
+    signer = Ed25519PrivateKey.generate()
+    public = signer.public_key().public_bytes_raw().hex()
+    origin_hash = "a" * 64
+    claims = _admission_claims(origin_hash=origin_hash)
+    claims["schema_version"] = 4
+    claims["resource_binding"] = {
+        **claims["resource_binding"],
+        "outcome_profile": None,
+        "outcome_public_key": None,
+    }
+    claims["trusted_counterparty_points"] = {}
+    token = _slip(claims, signer, trust_root_id="admission", context=ADMISSION_CONTEXT)
+    result = verify_authority_admission(
+        token,
+        admission_trust_roots={"admission": {"scheme": "ed25519", "public_key": public}},
+        expected_domain="customer-domain",
+        expected_ledger_id="ledger",
+        at=NOW,
+    )
+
+    assert result.valid and result.admission is not None
+    malformed = {
+        **claims,
+        "trusted_counterparty_points": {
+            ENFORCEMENT_POINT: {
+                "domain_id": "a-domain",
+                "ledger_id": "a-ledger",
+                "resource_id": "a-resource",
+                "resource_binding_hash": "not-a-digest",
+                "public_key": "66" * 32,
+                "revocation_trust_roots": {"a-revocations": "77" * 32},
+                "revocation_status_url": "https://a.invalid",
+                "profile": "customer-delete/1",
+                "max_revocation_age_ms": 1000,
+                "consent_delegation_token": "consent",
+                "consent_parent_delegation_tokens": [],
+            }
+        },
+    }
+    rejected = verify_authority_admission(
+        _slip(malformed, signer, trust_root_id="admission", context=ADMISSION_CONTEXT),
+        admission_trust_roots={"admission": {"scheme": "ed25519", "public_key": public}},
+        expected_domain="customer-domain",
+        expected_ledger_id="ledger",
+        at=NOW,
+    )
+
+    assert not rejected.valid
+
+
+def test_foreign_evidence_never_uses_a_historical_admission_snapshot() -> None:
+    historical_claims = _admission_claims(origin_hash="a" * 64)
+    historical = AuthorityAdmission(
+        claims=historical_claims,
+        admission_hash="b" * 64,
+        trust_configuration_hash="c" * 64,
+        nbf=datetime(2025, 1, 1, tzinfo=UTC),
+        exp=datetime(2027, 1, 1, tzinfo=UTC),
+    )
+    receipt = {
+        "evidence": {
+            "hashes": {"foreign_dispatch_hash": "d" * 64},
+            "foreign_dispatch": {
+                "artifact": "plausible-foreign-dispatch",
+                "revocation_statuses": [],
+                "trusted_counterparty_points": {
+                    ENFORCEMENT_POINT: {
+                        "domain_id": "a-domain",
+                        "ledger_id": "a-ledger",
+                        "resource_id": "a-resource",
+                        "resource_binding_hash": "88" * 32,
+                        "public_key": "66" * 32,
+                        "revocation_trust_roots": {"a-revocations": "77" * 32},
+                        "revocation_status_url": "https://a.invalid",
+                        "profile": "customer-delete/1",
+                        "max_revocation_age_ms": 1000,
+                        "consent_delegation_token": "consent",
+                        "consent_parent_delegation_tokens": [],
+                    }
+                },
+            },
+        }
+    }
+
+    result = verify_foreign_dispatch(receipt, admission=historical, at=NOW)
+
+    assert not result.valid

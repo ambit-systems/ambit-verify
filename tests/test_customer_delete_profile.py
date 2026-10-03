@@ -138,7 +138,16 @@ def test_customer_delete_dispatch_and_binding_are_strict() -> None:
         "outcome_profile": CUSTOMER_DELETE_PROFILE,
         "outcome_public_key": "c" * 64,
     }
-    assert resource_binding_hash(binding)
+    ordinary_hash = resource_binding_hash(binding)
+    routed_binding = {
+        **binding,
+        "counterparty_ingress_url": "https://counterparty.invalid/v1/ingress",
+    }
+    routed_hash = resource_binding_hash(routed_binding)
+    assert ordinary_hash != routed_hash
+    assert routed_hash != resource_binding_hash(
+        {**routed_binding, "counterparty_ingress_url": "https://counterparty.invalid/v1/other"}
+    )
 
     claims["action_boundary"] = "tool_execution"
     with pytest.raises(ValueError):
@@ -147,6 +156,34 @@ def test_customer_delete_dispatch_and_binding_are_strict() -> None:
         resource_binding_hash({**binding, "unexpected": True})
     with pytest.raises(ValueError):
         resource_binding_hash({**binding, "adapter_id": "mcp"})
+
+
+@pytest.mark.parametrize(
+    "ingress_url",
+    [
+        "https://user@counterparty.invalid/v1/ingress",
+        "https://counterparty.invalid/v1/ingress#fragment",
+        "ftp://counterparty.invalid/v1/ingress",
+        "https://counterparty.invalid:70000/v1/ingress",
+        " https://counterparty.invalid/v1/ingress",
+        None,
+    ],
+)
+def test_counterparty_ingress_url_rejects_ambiguous_or_non_http_destinations(
+    ingress_url: object,
+) -> None:
+    binding = {
+        "adapter_id": "http",
+        "downstream_url": "http://tool-gateway:9000",
+        "downstream_path": "/v1/tools/call",
+        "receipt_public_key": "b" * 64,
+        "outcome_profile": CUSTOMER_DELETE_PROFILE,
+        "outcome_public_key": "c" * 64,
+        "counterparty_ingress_url": ingress_url,
+    }
+
+    with pytest.raises(ValueError):
+        resource_binding_hash(binding)
 
 
 def test_customer_delete_outcomes_require_explicit_state_transition() -> None:
@@ -208,7 +245,7 @@ def _admission_token(claims: dict[str, object], key: Ed25519PrivateKey) -> str:
     return f"{encoded.decode()}.ed25519:{signature.decode()}"
 
 
-def test_customer_delete_six_field_binding_is_admitted_under_schema2() -> None:
+def test_customer_delete_binding_optionally_admits_counterparty_ingress_under_schema2() -> None:
     signer = Ed25519PrivateKey.generate()
     claims: dict[str, object] = {
         "schema_version": 2,
@@ -253,6 +290,40 @@ def test_customer_delete_six_field_binding_is_admitted_under_schema2() -> None:
     )
 
     assert verified.valid and verified.admission is not None
+    binding = claims["resource_binding"]
+    assert isinstance(binding, dict)
+    binding["counterparty_ingress_url"] = "https://counterparty.invalid/v1/ingress"
+    routed = verify_authority_admission(
+        _admission_token(claims, signer),
+        admission_trust_roots={
+            "admission": {
+                "scheme": "ed25519",
+                "public_key": signer.public_key().public_bytes_raw().hex(),
+            }
+        },
+        expected_domain="customer-domain",
+        expected_ledger_id="customer-ledger",
+        at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    assert routed.valid and routed.admission is not None
+    assert routed.admission.claims["resource_binding"]["counterparty_ingress_url"] == (
+        "https://counterparty.invalid/v1/ingress"
+    )
+
+    binding["counterparty_ingress_url"] = "https://user@counterparty.invalid/v1/ingress"
+    assert not verify_authority_admission(
+        _admission_token(claims, signer),
+        admission_trust_roots={
+            "admission": {
+                "scheme": "ed25519",
+                "public_key": signer.public_key().public_bytes_raw().hex(),
+            }
+        },
+        expected_domain="customer-domain",
+        expected_ledger_id="customer-ledger",
+        at=datetime(2026, 1, 1, tzinfo=UTC),
+    ).valid
 
 
 def test_dispatch_revocation_identity_is_optional_and_strict() -> None:

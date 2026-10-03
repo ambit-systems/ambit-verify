@@ -9,7 +9,12 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from .hashing import canonical_json_bytes, parse_nonnegative_amount_scaled
+from .hashing import (
+    canonical_json_bytes,
+    hash_object,
+    parse_nonnegative_amount_scaled,
+    sha256_hex,
+)
 from .models import DelegationClaims
 
 CONSUMPTION_PROFILE = "canonical-operation/1"
@@ -43,6 +48,22 @@ _CONSUMED_IDENTIFIER_FIELDS = frozenset({"namespace", "identifier", "expires_at"
 _HEX = frozenset("0123456789abcdef")
 _OPERATION_ID_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
+)
+
+
+_COUNTERPARTY_TRANSPORT_FIELDS = frozenset(
+    {
+        "decision_hash",
+        "intent_hash",
+        "dispatch_token",
+        "dispatch_claims",
+        "foreign_dispatch_hash",
+        "foreign_descriptor_hash",
+        "operation_hash",
+        "request_body",
+        "request_body_hash",
+        "pending_ack",
+    }
 )
 
 
@@ -97,6 +118,11 @@ def validate_operation_descriptor(value: object) -> dict[str, Any]:
     except (TypeError, ValueError, OverflowError) as error:
         raise ValueError("operation descriptor is outside canonical JSON") from error
     return result
+
+
+def operation_descriptor_hash(value: object) -> str:
+    """Hash one strict frozen operation descriptor."""
+    return hash_object(validate_operation_descriptor(value))
 
 
 def bound_applies(bound: Mapping[str, Any], *, action_type: str, action_boundary: str) -> bool:
@@ -275,12 +301,51 @@ def _validate_consumption_block(value: object, *, authorized_at: datetime) -> No
         raise ValueError("refused decision consumption must be uncharged")
 
 
+def _validate_counterparty_transport(record: Mapping[str, Any]) -> None:
+    for name in (
+        "decision_hash",
+        "intent_hash",
+        "foreign_dispatch_hash",
+        "foreign_descriptor_hash",
+        "operation_hash",
+        "request_body_hash",
+    ):
+        _digest(record.get(name), name=f"counterparty {name}")
+    token = record.get("dispatch_token")
+    if not isinstance(token, str) or not token or not token.isascii():
+        raise ValueError("counterparty dispatch token is invalid")
+    if sha256_hex(token.encode("ascii")) != record["foreign_dispatch_hash"]:
+        raise ValueError("counterparty dispatch token hash does not match")
+    claims = record.get("dispatch_claims")
+    if not isinstance(claims, Mapping):
+        raise ValueError("counterparty dispatch claims are invalid")
+    if claims.get("payload_hash") != record["operation"].get("payload_hash"):
+        raise ValueError("counterparty dispatch claims payload hash differs from operation")
+    body = record.get("request_body")
+    if not isinstance(body, str):
+        raise ValueError("counterparty request body is invalid")
+    try:
+        body_bytes = body.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ValueError("counterparty request body is not canonical UTF-8") from error
+    if sha256_hex(body_bytes) != record["request_body_hash"]:
+        raise ValueError("counterparty request body hash does not match")
+    if not isinstance(record.get("pending_ack"), str):
+        raise ValueError("counterparty pending acknowledgment is invalid")
+
+
 def _validate_consumption_event(record: Mapping[str, Any], *, evaluated_at: datetime) -> None:
     base = {"record_type", "profile", "event", "operation", "evaluated_at"}
     if record.get("record_type") != "consumption" or record.get("profile") != CONSUMPTION_PROFILE:
         raise ValueError("consumption record identity is invalid")
     event = record.get("event")
-    if event not in {"dispatch_fenced", "settlement", "authentication"}:
+    if event not in {
+        "dispatch_fenced",
+        "counterparty_pending",
+        "counterparty_resume_fenced",
+        "settlement",
+        "authentication",
+    }:
         raise ValueError("consumption event is invalid")
     if event != "authentication":
         validate_operation_descriptor(record.get("operation"))
@@ -298,6 +363,34 @@ def _validate_consumption_event(record: Mapping[str, Any], *, evaluated_at: date
             raise ValueError("dispatch claims are invalid")
         if claims.get("payload_hash") != record["operation"].get("payload_hash"):
             raise ValueError("dispatch claims payload hash differs from operation")
+    elif event == "counterparty_pending":
+        fields = base | _COUNTERPARTY_TRANSPORT_FIELDS
+        if set(record) - {"seq", "prev_hash", "record_hash", "timestamp_utc"} != fields:
+            raise ValueError("counterparty_pending record fields are invalid")
+        _validate_counterparty_transport(record)
+    elif event == "counterparty_resume_fenced":
+        fields = (
+            base
+            | _COUNTERPARTY_TRANSPORT_FIELDS
+            | {
+                "pending_hash",
+                "b_request_fingerprint",
+                "b_escalation_record_hash",
+                "counterparty_context_hash",
+                "resume_authentication_hash",
+            }
+        )
+        if set(record) - {"seq", "prev_hash", "record_hash", "timestamp_utc"} != fields:
+            raise ValueError("counterparty_resume_fenced record fields are invalid")
+        for name in (
+            "pending_hash",
+            "b_request_fingerprint",
+            "b_escalation_record_hash",
+            "counterparty_context_hash",
+            "resume_authentication_hash",
+        ):
+            _digest(record.get(name), name=f"counterparty {name}")
+        _validate_counterparty_transport(record)
     elif event == "settlement":
         fields = base | {"decision_hash", "intent_hash", "status", "basis", "resource_outcome"}
         if set(record) - {"seq", "prev_hash", "record_hash", "timestamp_utc"} != fields:
@@ -330,7 +423,7 @@ def _validate_consumption_event(record: Mapping[str, Any], *, evaluated_at: date
         if set(record) - {"seq", "prev_hash", "record_hash", "timestamp_utc"} != fields:
             raise ValueError("authentication record fields are invalid")
         kind = record.get("authentication_kind")
-        if kind not in {"retry", "reconciliation", "delegation_issuance"}:
+        if kind not in {"retry", "reconciliation", "delegation_issuance", "counterparty_resume"}:
             raise ValueError("authentication kind is invalid")
         operation = record.get("operation")
         if kind == "delegation_issuance":
@@ -415,6 +508,7 @@ def validate_consumption_record(record: Mapping[str, Any]) -> None:
 __all__ = [
     "CONSUMPTION_PROFILE",
     "bound_applies",
+    "operation_descriptor_hash",
     "required_account_bounds",
     "validate_consumption_record",
     "validate_operation_descriptor",

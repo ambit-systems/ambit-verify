@@ -108,6 +108,32 @@ refuses. The separately exposed per-receipt
 `verify_execution_authority` API continues to take one already-selected,
 singular `admission_trust_roots` map.
 
+For a schema-4 B admission, `trusted_counterparty_points` is signed B consent,
+not a trust map supplied by an execution bundle. Each point pins A's domain,
+ledger, resource id, and resource-binding hash as well as its enforcement key.
+A foreign customer-delete receipt retains the raw A dispatch, its SHA-256, one
+A revocation status per signed delegation identifier, and a point-map snapshot.
+The verifier requires that snapshot to exactly match B's verified admission
+before it uses its A public key or revocation roots. It then verifies the A
+dispatch/statuses, canonical B request and payload, actor key fingerprint,
+B's normal consent delegation path, and the `foreign_dispatch` consumption
+through A's expiry.
+
+Foreign B execution additionally requires the raw, signed
+`counterparty_context/1` artifact in
+`request_envelope.counterparty_context = {"artifact", "operation_hash"}` and
+its SHA-256 at `evidence.hashes.counterparty_context_hash`. The verifier
+selects its existing B approval trust root only from the signed B point
+selector, joins the context to B's canonical request, destination, consent,
+and native request justification, and refuses a hash-only or legacy path.
+
+Counterparty pending acknowledgments are B outcome-key signatures over the
+frozen A dispatch/body hashes. A resume fence records the awaiting-approval
+acknowledgment's context, B request fingerprint, B escalation hash, and the
+single-use `resume_authentication_hash` of its preceding authenticated
+`counterparty_resume` request. That retained proof-free request binds the
+exact pending acknowledgment, raw context artifact, and B approval token.
+
 Each check is an explicit three-state string: `valid`, `failed`, or
 `not_established`. A malformed or contradictory retained artifact makes the
 check that attempted to verify it `failed`; absent or unresolved future-phase
@@ -144,6 +170,12 @@ outcome that carries an optional `reason`: one of `delegation_revoked`,
 `static_obligation_failed`, `compare_and_swap_mismatch`, `plan_hash_mismatch`,
 or `dispatch_expired`, naming which pre-commit check settled the operation
 without a push.
+
+An admitted resource binding may include `counterparty_ingress_url` only when
+an adapter has an explicit transport destination. It is an exact, hashed
+absolute `http` or `https` URL without userinfo or fragment. Its presence does
+not alter the admitted `downstream_url` or `downstream_path`, which remain the
+canonical final resource-door identity.
 
 This verifier does not establish independently operated humans, independent
 human custody, malicious-host effect prevention, bank settlement, global

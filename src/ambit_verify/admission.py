@@ -25,8 +25,17 @@ from .models import DelegationClaims
 from .ratification_bundle import GRANT_FILE, verify_ratification_bundle
 from .resource_protocol import (
     CUSTOMER_DELETE_PROFILE,
+    counterparty_consent_hash,
+    counterparty_destination_hash,
+    counterparty_foreign_descriptor_hash,
+    dispatch_max_revocation_age_ms,
+    dispatch_revocation_identity,
     git_ref_is_covered,
+    payload_bytes,
     resource_binding_hash,
+    validate_counterparty_ingress_url,
+    verify_counterparty_context,
+    verify_dispatch,
 )
 from .revocation_types import verify_revocation_attestation
 from .status_evidence import (
@@ -39,10 +48,10 @@ from .tokens import validate_delegation_chain
 from .tokens_slips import _verified_slip_signer_id, _verify_slip, parse_delegation
 
 ADMISSION_CONTEXT = "ambit:authority-admission:v1"
-ADMISSION_SCHEMA_VERSION = 3
-SUPPORTED_ADMISSION_SCHEMA_VERSIONS = frozenset({1, 2, ADMISSION_SCHEMA_VERSION})
+ADMISSION_SCHEMA_VERSION = 4
+SUPPORTED_ADMISSION_SCHEMA_VERSIONS = frozenset({1, 2, 3, ADMISSION_SCHEMA_VERSION})
 _HEX = frozenset("0123456789abcdef")
-_FIELDS = frozenset(
+_BASE_FIELDS = frozenset(
     {
         "schema_version",
         "domain_id",
@@ -66,12 +75,14 @@ _FIELDS = frozenset(
         "trust_root_id",
     }
 )
+_FIELDS = _BASE_FIELDS | frozenset({"trusted_counterparty_points"})
 _ROOT_FIELDS = (
     "credential_trust_roots",
     "credential_registration_public_keys",
     "revocation_attestation_public_keys",
     "cumulative_attestation_public_keys",
 )
+_TRUST_CONFIGURATION_FIELDS = (*_ROOT_FIELDS, "trusted_counterparty_points")
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +141,78 @@ def _moment(value: Any) -> datetime:
     return moment.astimezone(UTC)
 
 
+def _counterparty_point_errors(points: Any, *, credential_trust_roots: Any) -> list[str]:
+    required = {
+        "domain_id",
+        "ledger_id",
+        "resource_id",
+        "resource_binding_hash",
+        "public_key",
+        "revocation_trust_roots",
+        "revocation_status_url",
+        "profile",
+        "max_revocation_age_ms",
+        "consent_delegation_token",
+        "consent_parent_delegation_tokens",
+    }
+    optional = {"counterparty_context_approval_trust_root_id"}
+    if not isinstance(points, Mapping):
+        return ["admission trusted counterparty points must be an object"]
+    errors: list[str] = []
+    for point_id, point in points.items():
+        if not _digest(point_id, size=16):
+            errors.append("admission trusted counterparty point id is invalid")
+        if not isinstance(point, Mapping) or set(point) not in (required, required | optional):
+            errors.append("admission trusted counterparty point fields are invalid")
+            continue
+        for name in (
+            "domain_id",
+            "ledger_id",
+            "resource_id",
+            "consent_delegation_token",
+        ):
+            value = point.get(name)
+            if not isinstance(value, str) or not value or value != value.strip():
+                errors.append(f"admission trusted counterparty point {name} is invalid")
+        if not _digest(point.get("resource_binding_hash")):
+            errors.append("admission trusted counterparty point resource binding hash is invalid")
+        if not _digest(point.get("public_key")):
+            errors.append("admission trusted counterparty point public key is invalid")
+        if point.get("profile") != CUSTOMER_DELETE_PROFILE:
+            errors.append("admission trusted counterparty point profile is invalid")
+        if not _positive_integer(point.get("max_revocation_age_ms")):
+            errors.append("admission trusted counterparty point max revocation age is invalid")
+        roots = point.get("revocation_trust_roots")
+        if (
+            not isinstance(roots, Mapping)
+            or not roots
+            or any(
+                not isinstance(root_id, str) or not root_id or not _digest(public_key)
+                for root_id, public_key in roots.items()
+            )
+        ):
+            errors.append("admission trusted counterparty point revocation roots are invalid")
+        try:
+            validate_counterparty_ingress_url(point.get("revocation_status_url"))
+        except ValueError:
+            errors.append("admission trusted counterparty point status URL is invalid")
+        parents = point.get("consent_parent_delegation_tokens")
+        if not isinstance(parents, list) or any(
+            not isinstance(token, str) or not token or token != token.strip() for token in parents
+        ):
+            errors.append("admission trusted counterparty point consent ancestry is invalid")
+        selector = point.get("counterparty_context_approval_trust_root_id")
+        if selector is not None and (
+            not isinstance(selector, str)
+            or not selector
+            or selector != selector.strip()
+            or not isinstance(credential_trust_roots, Mapping)
+            or selector not in credential_trust_roots
+        ):
+            errors.append("admission trusted counterparty context authority selector is invalid")
+    return errors
+
+
 def _shape_errors(claims: Mapping[str, Any]) -> list[str]:
     errors: list[str] = []
     version = claims.get("schema_version")
@@ -140,7 +223,8 @@ def _shape_errors(claims: Mapping[str, Any]) -> list[str]:
     )
     if not valid_schema_version:
         errors.append("unsupported admission schema version")
-    if set(claims) != _FIELDS:
+    expected_fields = _FIELDS if version == ADMISSION_SCHEMA_VERSION else _BASE_FIELDS
+    if set(claims) != expected_fields:
         errors.append(f"admission fields do not match schema version {version!r}")
     for name in ("domain_id", "principal_id", "resource_id", "ledger_id", "trust_root_id"):
         value = claims.get(name)
@@ -167,6 +251,13 @@ def _shape_errors(claims: Mapping[str, Any]) -> list[str]:
         errors.append("admission must bind exact originating grant hashes")
     elif len(set(origins)) != len(origins):
         errors.append("admission contains duplicate originating grant hashes")
+    if version == ADMISSION_SCHEMA_VERSION:
+        errors.extend(
+            _counterparty_point_errors(
+                claims.get("trusted_counterparty_points"),
+                credential_trust_roots=claims.get("credential_trust_roots"),
+            )
+        )
     for name in _ROOT_FIELDS:
         roots = claims.get(name)
         if not isinstance(roots, Mapping) or not roots:
@@ -186,23 +277,35 @@ def _shape_errors(claims: Mapping[str, Any]) -> list[str]:
                 errors.append(f"admission {name} requires Ed25519 public keys")
     binding = claims.get("resource_binding")
     binding_fields = {"adapter_id", "downstream_url", "downstream_path", "receipt_public_key"}
-    if valid_schema_version and version in {2, ADMISSION_SCHEMA_VERSION}:
+    if valid_schema_version and version in {2, 3, ADMISSION_SCHEMA_VERSION}:
         binding_fields |= {"outcome_profile", "outcome_public_key"}
     if (
-        version == ADMISSION_SCHEMA_VERSION
+        version in {3, ADMISSION_SCHEMA_VERSION}
         and isinstance(binding, Mapping)
         and binding.get("outcome_profile") == "git-publication/1"
     ):
         binding_fields |= {"git_remote", "git_ref"}
+    if (
+        valid_schema_version
+        and version in {2, 3, ADMISSION_SCHEMA_VERSION}
+        and isinstance(binding, Mapping)
+        and "counterparty_ingress_url" in binding
+    ):
+        binding_fields |= {"counterparty_ingress_url"}
     if not isinstance(binding, Mapping) or set(binding) != binding_fields:
         errors.append("admission resource binding fields are invalid")
     else:
         for name in ("adapter_id", "downstream_url", "downstream_path"):
             if not isinstance(binding[name], str) or not binding[name]:
                 errors.append(f"admission resource binding {name} is invalid")
+        if "counterparty_ingress_url" in binding:
+            try:
+                validate_counterparty_ingress_url(binding["counterparty_ingress_url"])
+            except ValueError:
+                errors.append("admission counterparty ingress URL is invalid")
         if not _digest(binding["receipt_public_key"]):
             errors.append("admission resource receipt public key is invalid")
-        if valid_schema_version and version in {2, ADMISSION_SCHEMA_VERSION}:
+        if valid_schema_version and version in {2, 3, ADMISSION_SCHEMA_VERSION}:
             outcome_profile = binding["outcome_profile"]
             outcome_public_key = binding["outcome_public_key"]
             if not (
@@ -216,13 +319,15 @@ def _shape_errors(claims: Mapping[str, Any]) -> list[str]:
             ):
                 errors.append("admission resource outcome attestation pair is invalid")
             try:
-                if valid_schema_version and version in {2, ADMISSION_SCHEMA_VERSION}:
-                    resource_binding_hash(binding)
+                resource_binding_hash(binding)
             except TypeError, ValueError:
                 errors.append("admission resource binding is invalid")
-            if outcome_profile == "git-publication/1" and version != ADMISSION_SCHEMA_VERSION:
+            if outcome_profile == "git-publication/1" and version not in {
+                3,
+                ADMISSION_SCHEMA_VERSION,
+            }:
                 errors.append("admission Git resource binding is invalid")
-            elif version == ADMISSION_SCHEMA_VERSION and outcome_profile != "git-publication/1":
+            elif version == 3 and outcome_profile != "git-publication/1":
                 errors.append("admission schema3 requires the Git publication profile")
     return errors
 
@@ -303,7 +408,12 @@ def verify_authority_admission(
             and claims["previous_admission_hash"] != expected_previous_hash
         ):
             errors.append("admission does not continue the accepted predecessor")
-        trust_hash = hash_object({name: claims[name] for name in _ROOT_FIELDS})
+        configuration_fields = (
+            _TRUST_CONFIGURATION_FIELDS
+            if claims["schema_version"] == ADMISSION_SCHEMA_VERSION
+            else _ROOT_FIELDS
+        )
+        trust_hash = hash_object({name: claims[name] for name in configuration_fields})
         admission_hash = sha256_hex(token.encode("utf-8"))
     except (KeyError, TypeError, ValueError, OverflowError) as error:
         return AdmissionVerification(False, None, (f"malformed authority admission: {error}",))
@@ -424,11 +534,16 @@ def admission_configuration_matches(
     configuration: Mapping[str, Any],
 ) -> bool:
     """Compare complete public verification preimages, not mutable root aliases."""
+    fields = (
+        _TRUST_CONFIGURATION_FIELDS
+        if admission.claims.get("schema_version") == ADMISSION_SCHEMA_VERSION
+        else _ROOT_FIELDS
+    )
     try:
-        return all(
+        return set(configuration) == set(fields) and all(
             canonical_json_bytes(admission.claims[name])
             == canonical_json_bytes(configuration.get(name))
-            for name in _ROOT_FIELDS
+            for name in fields
         )
     except TypeError, ValueError, OverflowError:
         return False
@@ -752,6 +867,249 @@ def _verify_revocation_status(
     return None
 
 
+@dataclass(frozen=True, slots=True)
+class ForeignDispatchVerification:
+    """Verification of one foreign dispatch under B's signed admission."""
+
+    valid: bool
+    dispatch_hash: str | None = None
+    not_after: datetime | None = None
+    errors: tuple[str, ...] = ()
+
+
+def verify_foreign_dispatch(
+    receipt: Mapping[str, Any],
+    *,
+    admission: AuthorityAdmission,
+    at: datetime,
+) -> ForeignDispatchVerification:
+    """Verify an A dispatch only through B's signed counterparty-point consent.
+
+    The retained point map is evidence of what B used, never a root of trust:
+    it must be byte-for-byte canonical-equivalent to the map signed in B's
+    schema-4 admission. B's local consent chain remains verified by the normal
+    execution-authority path.
+    """
+    if (
+        not isinstance(receipt, Mapping)
+        or not isinstance(admission, AuthorityAdmission)
+        or admission.claims.get("schema_version") != ADMISSION_SCHEMA_VERSION
+        or not isinstance(at, datetime)
+        or at.tzinfo is None
+        or at.utcoffset() is None
+    ):
+        return ForeignDispatchVerification(
+            False, errors=("foreign dispatch verification inputs are invalid",)
+        )
+    evidence = receipt.get("evidence")
+    if not isinstance(evidence, Mapping):
+        return ForeignDispatchVerification(
+            False, errors=("foreign dispatch evidence is not admitted",)
+        )
+    foreign = evidence.get("foreign_dispatch")
+    hashes = evidence.get("hashes")
+    points = admission.claims.get("trusted_counterparty_points")
+    if (
+        not isinstance(foreign, Mapping)
+        or set(foreign) != {"artifact", "revocation_statuses", "trusted_counterparty_points"}
+        or not isinstance(hashes, Mapping)
+        or not isinstance(points, Mapping)
+        or evidence.get("actor_proof") is not None
+        or not _same_json(foreign.get("trusted_counterparty_points"), points)
+    ):
+        return ForeignDispatchVerification(
+            False, errors=("foreign dispatch evidence is not admitted",)
+        )
+    token = foreign.get("artifact")
+    dispatch_hash = sha256_hex(token.encode("utf-8")) if isinstance(token, str) else None
+    if (
+        not isinstance(token, str)
+        or not token
+        or hashes.get("foreign_dispatch_hash") != dispatch_hash
+    ):
+        return ForeignDispatchVerification(
+            False, errors=("foreign dispatch digest does not bind evidence",)
+        )
+    candidates: list[tuple[str, Mapping[str, Any], dict[str, Any]]] = []
+    for point_id, point in points.items():
+        if not isinstance(point_id, str) or not isinstance(point, Mapping):
+            continue
+        public_key = point.get("public_key")
+        if not isinstance(public_key, str):
+            continue
+        try:
+            claims = verify_dispatch(token, public_key=public_key)
+        except TypeError, ValueError:
+            continue
+        if claims.get("enforcement_point_id") == point_id:
+            candidates.append((point_id, point, claims))
+    if len(candidates) != 1:
+        return ForeignDispatchVerification(
+            False, errors=("foreign dispatch does not identify one admitted point",)
+        )
+    _point_id, point, claims = candidates[0]
+    public_key = point["public_key"]
+    if (
+        claims.get("domain_id") != point["domain_id"]
+        or claims.get("ledger_id") != point["ledger_id"]
+        or claims.get("resource_id") != point["resource_id"]
+        or claims.get("resource_binding_hash") != point["resource_binding_hash"]
+        or point.get("profile") != CUSTOMER_DELETE_PROFILE
+        or claims.get("profile") != CUSTOMER_DELETE_PROFILE
+    ):
+        return ForeignDispatchVerification(
+            False, errors=("foreign dispatch point identity, binding, or profile differs",)
+        )
+    request = evidence.get("request_envelope") if isinstance(evidence, Mapping) else None
+    action = receipt.get("action")
+    target = receipt.get("object")
+    decision = _receipt_decision(receipt)
+    consumption = receipt.get("consumption")
+    operation = consumption.get("operation") if isinstance(consumption, Mapping) else None
+    call = request.get("call") if isinstance(request, Mapping) else None
+    arguments = call.get("arguments") if isinstance(call, Mapping) else None
+    binding = admission.claims.get("resource_binding")
+    expected_actor = f"ed25519:{public_key}"
+    expected_fingerprint = sha256_hex(bytes.fromhex(public_key))
+    if (
+        not isinstance(request, Mapping)
+        or request.get("foreign_dispatch") != token
+        or request.get("adapter_id") != "http"
+        or request.get("operation_id") != claims.get("operation_id")
+        or request.get("delegation_token") != point.get("consent_delegation_token")
+        or request.get("parent_delegation_tokens") != point.get("consent_parent_delegation_tokens")
+        or not isinstance(request.get("actor"), Mapping)
+        or request["actor"].get("id") != expected_actor
+        or decision.get("actor_id") != expected_actor
+        or not isinstance(operation, Mapping)
+        or operation.get("actor_key_fingerprint") != expected_fingerprint
+        or not isinstance(action, Mapping)
+        or not isinstance(target, Mapping)
+        or not isinstance(call, Mapping)
+        or call.get("name") != "customer.delete"
+        or not isinstance(arguments, Mapping)
+        or set(arguments) != {"customer_id", "destination", "route"}
+        or not isinstance(binding, Mapping)
+        or binding.get("adapter_id") != "http"
+        or arguments.get("route") != binding.get("downstream_path")
+        or arguments.get("destination")
+        != f"{binding.get('downstream_url')}{binding.get('downstream_path')}"
+        or target.get("id") != arguments.get("destination")
+        or target.get("domain") != "http"
+        or action.get("type") != "delete"
+        or action.get("boundary") != "network_egress"
+        or claims.get("action_type") != action.get("type")
+        or claims.get("action_boundary") != action.get("boundary")
+        or claims.get("action_domain") != target.get("domain")
+        or claims.get("action_path") != target.get("id")
+        or claims.get("customer_id") != arguments.get("customer_id")
+    ):
+        return ForeignDispatchVerification(
+            False, errors=("foreign dispatch does not bind B's canonical request",)
+        )
+    try:
+        if claims.get("payload_hash") != sha256_hex(payload_bytes(dict(call))):
+            return ForeignDispatchVerification(
+                False, errors=("foreign dispatch payload differs from B request",)
+            )
+        authorized_at = _moment(claims.get("authorized_at"))
+        not_after = _moment(claims.get("not_after"))
+    except TypeError, ValueError:
+        return ForeignDispatchVerification(False, errors=("foreign dispatch timing is invalid",))
+
+    context = request.get("counterparty_context")
+    selector = point.get("counterparty_context_approval_trust_root_id")
+    credential_roots = admission.claims.get("credential_trust_roots")
+    context_hash = (
+        sha256_hex(context["artifact"].encode("utf-8"))
+        if isinstance(context, Mapping) and isinstance(context.get("artifact"), str)
+        else None
+    )
+    selected_root = (
+        credential_roots.get(selector)
+        if isinstance(credential_roots, Mapping) and isinstance(selector, str)
+        else None
+    )
+    native_context = request.get("context")
+    native_justification = (
+        native_context.get("justification") if isinstance(native_context, Mapping) else None
+    )
+    if (
+        not isinstance(context, Mapping)
+        or set(context) != {"artifact", "operation_hash"}
+        or hashes.get("counterparty_context_hash") != context_hash
+        or not isinstance(selector, str)
+        or not isinstance(selected_root, Mapping)
+        or not isinstance(native_justification, str)
+        or not native_justification
+        or native_justification != native_justification.strip()
+        or not isinstance(context.get("operation_hash"), str)
+    ):
+        return ForeignDispatchVerification(
+            False, errors=("foreign dispatch lacks retained admitted B context",)
+        )
+    try:
+        verify_counterparty_context(
+            context["artifact"],
+            trust_roots={selector: selected_root},
+            expected_foreign_dispatch_hash=sha256_hex(token.encode("utf-8")),
+            expected_foreign_descriptor_hash=counterparty_foreign_descriptor_hash(claims),
+            expected_operation_hash=context["operation_hash"],
+            expected_request_body_hash=claims["payload_hash"],
+            expected_destination_hash=counterparty_destination_hash(
+                domain_id=admission.claims["domain_id"],
+                ledger_id=admission.claims["ledger_id"],
+                enforcement_point_id=admission.claims["enforcement_point_id"],
+                resource_binding_hash=resource_binding_hash(binding),
+            ),
+            expected_consent_hash=counterparty_consent_hash(
+                delegation_token=point["consent_delegation_token"],
+                parent_delegation_tokens=point["consent_parent_delegation_tokens"],
+            ),
+            expected_justification=native_justification,
+            expected_dispatch_not_after=not_after,
+            at=at,
+        )
+    except KeyError, TypeError, ValueError:
+        return ForeignDispatchVerification(
+            False, errors=("foreign dispatch B context does not verify",)
+        )
+    if not authorized_at <= at <= not_after:
+        return ForeignDispatchVerification(
+            False, errors=("foreign dispatch does not cover B authorization time",)
+        )
+    identity = dispatch_revocation_identity(claims)
+    if identity is None:
+        return ForeignDispatchVerification(
+            False, errors=("foreign dispatch lacks revocation identity",)
+        )
+    jtis, epoch = identity
+    statuses = foreign.get("revocation_statuses")
+    if not isinstance(statuses, list) or len(statuses) != len(jtis):
+        return ForeignDispatchVerification(
+            False, errors=("foreign dispatch status evidence is incomplete",)
+        )
+    age = dispatch_max_revocation_age_ms(claims)
+    for jti, status in zip(jtis, statuses, strict=True):
+        error = _verify_revocation_status(
+            status,
+            jti=jti,
+            roots=point["revocation_trust_roots"],
+            at=at,
+            admission_age_limit_ms=int(point["max_revocation_age_ms"]),
+            grant_age_limit_ms=age,
+            epoch_floor=epoch,
+        )
+        if error is not None:
+            return ForeignDispatchVerification(False, errors=(f"foreign dispatch {error}",))
+    regression = epoch_regression([status for status in statuses if isinstance(status, Mapping)])
+    if regression is not None:
+        return ForeignDispatchVerification(
+            False, errors=(f"foreign dispatch revocation epoch regressed at {regression}",)
+        )
+    return ForeignDispatchVerification(True, dispatch_hash, not_after)
+
+
 def _verify_cumulative_rows(
     rows: Any,
     *,
@@ -933,8 +1291,8 @@ def verify_execution_authority(
     if not admission_result.valid or admission is None:
         errors.extend(admission_result.errors)
         return ExecutionAuthorityVerification(False, checks, tuple(errors))
-    if evidence_schema == "6" and admission.claims.get("schema_version") not in {2, 3}:
-        errors.append("schema-v6 execution evidence requires admission schema 2 or 3")
+    if evidence_schema == "6" and admission.claims.get("schema_version") not in {2, 3, 4}:
+        errors.append("schema-v6 execution evidence requires admission schema 2, 3, or 4")
     admission_summary_matches = (
         admission_evidence.get("admission_hash") == admission.admission_hash
         and admission_evidence.get("trust_configuration_hash") == admission.trust_configuration_hash
@@ -983,9 +1341,14 @@ def verify_execution_authority(
     else:
         errors.append("retained enforcement point differs from signed admission")
     configuration = admission_evidence.get("verification_configuration")
+    configuration_fields = (
+        _TRUST_CONFIGURATION_FIELDS
+        if admission.claims.get("schema_version") == ADMISSION_SCHEMA_VERSION
+        else _ROOT_FIELDS
+    )
     if (
         not isinstance(configuration, Mapping)
-        or set(configuration) != set(_ROOT_FIELDS)
+        or set(configuration) != set(configuration_fields)
         or not admission_configuration_matches(admission, configuration)
     ):
         errors.append("retained verification configuration differs from signed admission")
@@ -1002,6 +1365,24 @@ def verify_execution_authority(
         errors.append("retained resource binding does not match the authenticated request adapter")
     else:
         checks["resource_binding"] = True
+    foreign_present = evidence.get("foreign_dispatch") is not None
+    evidence_hashes = evidence.get("hashes")
+    foreign_hash_present = (
+        isinstance(evidence_hashes, Mapping)
+        and evidence_hashes.get("foreign_dispatch_hash") is not None
+    )
+    if foreign_present != foreign_hash_present:
+        errors.append("foreign dispatch evidence and digest must co-occur")
+        return ExecutionAuthorityVerification(False, checks, tuple(errors))
+    foreign = (
+        verify_foreign_dispatch(receipt, admission=admission, at=at) if foreign_present else None
+    )
+    if foreign is not None and not foreign.valid:
+        errors.extend(foreign.errors)
+        return ExecutionAuthorityVerification(False, checks, tuple(errors))
+    if foreign is not None and evidence.get("actor_proof") is not None:
+        errors.append("foreign dispatch receipt must not retain an actor proof")
+        return ExecutionAuthorityVerification(False, checks, tuple(errors))
     delegation = receipt.get("delegation")
     if not isinstance(delegation, Mapping):
         errors.append("retained delegation evidence is missing")
@@ -1037,6 +1418,7 @@ def verify_execution_authority(
         registration_public_keys=admission.claims["credential_registration_public_keys"],
         escalation_record=escalation_record,
         audience=expected_ledger_id,
+        foreign_admission=admission if foreign is not None else None,
     )
     if credentials.valid:
         checks["retained_credentials"] = True
@@ -1102,7 +1484,17 @@ def verify_execution_authority(
         errors.append(
             "native request credential or call fields differ from retained receipt evidence"
         )
-    if (
+    if foreign is not None:
+        if (
+            not native_shape_valid
+            or not isinstance(request_envelope, Mapping)
+            or actor_id != leaf.sub
+            or native_actor_id != actor_id
+        ):
+            errors.append("foreign dispatch does not bind B's admitted consent subject")
+        else:
+            checks["holder_request"] = True
+    elif (
         not native_shape_valid
         or not isinstance(request_envelope, Mapping)
         or not isinstance(proof, Mapping)
