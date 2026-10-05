@@ -339,6 +339,16 @@ def _validate_consumption_event(record: Mapping[str, Any], *, evaluated_at: date
     if record.get("record_type") != "consumption" or record.get("profile") != CONSUMPTION_PROFILE:
         raise ValueError("consumption record identity is invalid")
     event = record.get("event")
+    if event == "counterparty_cancelled":
+        from .counterparty_recovery import validate_counterparty_cancellation_record_shape
+
+        validate_counterparty_cancellation_record_shape(record)
+        return
+    if event == "counterparty_recovered":
+        from .counterparty_recovery import validate_counterparty_recovery_record
+
+        validate_counterparty_recovery_record(record)
+        return
     if event not in {
         "dispatch_fenced",
         "counterparty_pending",

@@ -21,6 +21,10 @@ from .admission import (
     verify_foreign_dispatch,
 )
 from .consumption import required_account_bounds, validate_consumption_record
+from .counterparty_recovery import (
+    counterparty_foreign_dispatch_identity,
+    verify_counterparty_cancellation_record,
+)
 from .credential_registration import verify_enforcement_point_registration
 from .foreign_revocation import (
     project_foreign_revocation_policy,
@@ -40,6 +44,7 @@ from .resource_protocol import (
     resource_binding_hash,
     verify_counterparty_pending_ack,
     verify_dispatch,
+    verify_reconciliation,
     verify_resource_outcome,
 )
 from .tokens_slips import parse_approval, parse_delegation
@@ -748,6 +753,8 @@ def _replay_prefix(
     admission_trust_roots_by_adapter: Mapping[str, Mapping[str, Any]],
     expected_domain: str,
     expected_ledger_id: str,
+    enforcement_point_id: str,
+    enforcement_point_public_key: str,
 ) -> None:
     """Replay every current operation's retained accounting/transition evidence."""
     decisions: dict[str, Mapping[str, Any]] = {}
@@ -756,6 +763,12 @@ def _replay_prefix(
     fences: dict[str, Mapping[str, Any]] = {}
     pending: dict[str, Mapping[str, Any]] = {}
     resume_authentications: dict[str, Mapping[str, Any]] = {}
+    reconciliation_authentications: dict[str, Mapping[str, Any]] = {}
+    recovered: dict[str, Mapping[str, Any]] = {}
+    foreign_authorizations: dict[str, tuple[str, str]] = {}
+    foreign_fences: set[tuple[str, str]] = set()
+    foreign_cancellations: dict[tuple[str, str], Mapping[str, Any]] = {}
+    consumed_recovery_authentication_hashes: set[str] = set()
     consumed_resume_authentication_hashes: set[str] = set()
     operation_reservations: dict[str, list[str]] = {}
     charged: dict[tuple[Any, ...], tuple[int, int]] = {}
@@ -831,6 +844,31 @@ def _replay_prefix(
                 if admission is None:
                     raise ValueError("authorized decision admission cannot be re-verified")
                 _require_admission_adapter(admission, str(record["adapter_id"]))
+                foreign_evidence = (
+                    evidence.get("foreign_dispatch") if isinstance(evidence, Mapping) else None
+                )
+                if foreign_evidence is not None:
+                    raw_foreign_dispatch = (
+                        foreign_evidence.get("artifact")
+                        if isinstance(foreign_evidence, Mapping)
+                        else None
+                    )
+                    points = admission.claims.get("trusted_counterparty_points")
+                    if not isinstance(raw_foreign_dispatch, str) or not isinstance(
+                        points, Mapping
+                    ):
+                        raise ValueError(
+                            "native foreign authorization lacks admitted dispatch evidence"
+                        )
+                    foreign_point_id, foreign_claims = counterparty_foreign_dispatch_identity(
+                        raw_foreign_dispatch, points=points
+                    )
+                    foreign_identity = (foreign_point_id, foreign_claims["operation_id"])
+                    if foreign_identity in foreign_cancellations:
+                        raise ValueError(
+                            "canonical prefix authorizes a cancelled foreign operation"
+                        )
+                    foreign_authorizations[operation_id] = foreign_identity
                 declared = {
                     (item["namespace"], item["identifier"], _moment(item["expires_at"]))
                     for item in consumption["consumed_identifiers"]
@@ -886,6 +924,23 @@ def _replay_prefix(
             continue
         validate_consumption_record(record)
         event = record["event"]
+        if event == "counterparty_cancelled":
+            _admission, foreign_dispatch, _reconciliation = verify_counterparty_cancellation_record(
+                record,
+                admission_trust_roots=_adapter_roots(record, admission_trust_roots_by_adapter),
+                expected_domain=expected_domain,
+                expected_ledger_id=expected_ledger_id,
+            )
+            foreign_identity = (
+                foreign_dispatch["enforcement_point_id"],
+                foreign_dispatch["operation_id"],
+            )
+            if foreign_identity in foreign_cancellations:
+                raise ValueError("canonical prefix repeats a foreign operation cancellation")
+            if foreign_identity in foreign_fences:
+                raise ValueError("counterparty cancellation follows a B dispatch fence")
+            foreign_cancellations[foreign_identity] = record
+            continue
         operation = record["operation"]
         if event == "authentication":
             auth_time = _moment(record["evaluated_at"])
@@ -998,11 +1053,14 @@ def _replay_prefix(
             }
             if declared_auth_facts != expected_auth_fact:
                 raise ValueError("authentication consumed identifiers differ from its holder proof")
-            if record.get("authentication_kind") == "counterparty_resume":
-                record_hash = record.get("record_hash")
-                if not isinstance(record_hash, str):
-                    raise ValueError("counterparty resume authentication lacks a record hash")
-                resume_authentications[record_hash] = record
+            authentication_hash = record.get("record_hash")
+            if record.get("authentication_kind") in {"counterparty_resume", "reconciliation"}:
+                if not isinstance(authentication_hash, str):
+                    raise ValueError("counterparty authentication lacks a record hash")
+                if record["authentication_kind"] == "counterparty_resume":
+                    resume_authentications[authentication_hash] = record
+                else:
+                    reconciliation_authentications[authentication_hash] = record
             continue
         operation_id = operation["operation_id"]
         decision = decisions.get(operation_id)
@@ -1017,6 +1075,106 @@ def _replay_prefix(
             raise ValueError("lifecycle event does not retain the complete authorized operation")
         if record["decision_hash"] != decision.get("record_hash"):
             raise ValueError("lifecycle event does not join its canonical decision")
+        if event == "counterparty_recovered":
+            if operation.get("enforcement_point_id") != enforcement_point_id:
+                raise ValueError("counterparty recovery uses a different A enforcement point")
+            fence = fences.get(operation_id)
+            if fence is None or operation_states.get(operation_id) not in {
+                "fenced",
+                "pending",
+            }:
+                raise ValueError(
+                    "counterparty recovery lacks its original pending or fenced dispatch"
+                )
+            if record.get("intent_hash") != fence.get("intent_hash"):
+                raise ValueError("counterparty recovery does not retain the original fence intent")
+            authentication_hash = record.get("authentication_hash")
+            authentication = (
+                reconciliation_authentications.get(authentication_hash)
+                if isinstance(authentication_hash, str)
+                else None
+            )
+            if (
+                authentication is None
+                or authentication.get("seq", 0) >= record.get("seq", 0)
+                or authentication.get("operation") != operation
+                or authentication_hash in consumed_recovery_authentication_hashes
+            ):
+                raise ValueError("counterparty recovery lacks fresh preceding owner authentication")
+            dispatch_token = fence.get("dispatch_token")
+            dispatch_claims = fence.get("dispatch_claims")
+            if not isinstance(dispatch_token, str) or not isinstance(
+                dispatch_claims, Mapping
+            ):
+                raise ValueError(
+                    "counterparty recovery original fence lacks signed dispatch evidence"
+                )
+            if verify_dispatch(dispatch_token, public_key=enforcement_point_public_key) != dict(
+                dispatch_claims
+            ):
+                raise ValueError(
+                    "counterparty recovery fence dispatch differs from its signed claims"
+                )
+            reconciliation = verify_reconciliation(
+                record["recovery_request"], public_key=enforcement_point_public_key
+            )
+            if reconciliation.get("verb") not in {"query", "cancel"} or any(
+                reconciliation.get(name) != dispatch_claims.get(name)
+                for name in _resource_join_fields(dispatch_claims.get("profile"))
+            ):
+                raise ValueError(
+                    "counterparty recovery request does not join the original A dispatch"
+                )
+            recovery_time = _moment(record["evaluated_at"])
+            if not (
+                _moment(reconciliation.get("issued_at"))
+                <= recovery_time
+                < _moment(reconciliation.get("expires_at"))
+            ):
+                raise ValueError("counterparty recovery request is not fresh at recovery")
+            evidence = decision.get("evidence")
+            admission_evidence = (
+                evidence.get("authority_admission") if isinstance(evidence, Mapping) else None
+            )
+            admission_token = (
+                admission_evidence.get("artifact")
+                if isinstance(admission_evidence, Mapping)
+                else None
+            )
+            source: Mapping[str, Any] = decision
+            retained_decision = decision.get("decision")
+            if isinstance(retained_decision, Mapping):
+                source = retained_decision
+            if not isinstance(admission_token, str):
+                raise ValueError("counterparty recovery lacks the original A admission")
+            admission = verify_authority_admission(
+                admission_token,
+                admission_trust_roots=_adapter_roots(decision, admission_trust_roots_by_adapter),
+                expected_domain=expected_domain,
+                expected_ledger_id=expected_ledger_id,
+                at=_moment(source.get("evaluated_at")),
+            ).admission
+            binding = (
+                admission.claims.get("resource_binding") if admission is not None else None
+            )
+            outcome_key = (
+                binding.get("outcome_public_key") if isinstance(binding, Mapping) else None
+            )
+            if not isinstance(outcome_key, (str, bytes)):
+                raise ValueError("counterparty recovery lacks the admitted B outcome key")
+            outcome = verify_resource_outcome(record["resource_outcome"], public_key=outcome_key)
+            if any(
+                outcome.get(name) != dispatch_claims.get(name)
+                for name in _resource_join_fields(dispatch_claims.get("profile"))
+            ):
+                raise ValueError(
+                    "counterparty recovery terminal does not join the original A dispatch"
+                )
+            if operation_id in recovered:
+                raise ValueError("canonical prefix repeats counterparty recovery evidence")
+            consumed_recovery_authentication_hashes.add(authentication_hash)
+            recovered[operation_id] = record
+            continue
         if event == "dispatch_fenced":
             intent = intents.get(record["intent_hash"])
             if intent is None or intent.get("seq", 0) >= record.get("seq", 0):
@@ -1051,6 +1209,11 @@ def _replay_prefix(
                 ):
                     raise ValueError("signed dispatch fence does not join its exact operation")
                 _action_and_payload(decision, record)
+            foreign_identity = foreign_authorizations.get(operation_id)
+            if foreign_identity is not None:
+                if foreign_identity in foreign_cancellations:
+                    raise ValueError("B dispatch fence follows a foreign operation cancellation")
+                foreign_fences.add(foreign_identity)
             if operation_states.get(operation_id) != "authorized":
                 raise ValueError("dispatch fence is not the first authorized lifecycle transition")
             operation_states[operation_id] = "fenced"
@@ -1223,12 +1386,29 @@ def _replay_prefix(
                     ):
                         raise ValueError("pre-fence settlement does not retain its earlier intent")
             else:
-                if operation_states.get(operation_id) != "fenced" or fence is None:
+                recovery = recovered.get(operation_id)
+                if (
+                    fence is None
+                    or (
+                        operation_states.get(operation_id) != "fenced"
+                        and not (
+                            recovery is not None
+                            and operation_states.get(operation_id) in {"fenced", "pending"}
+                        )
+                    )
+                ):
                     raise ValueError(
                         "settlement is not the unique terminal transition after its fence"
                     )
                 if record.get("intent_hash") != fence.get("intent_hash"):
                     raise ValueError("settlement does not retain the fenced dispatch intent")
+                if recovery is not None and (
+                    record.get("basis") != "resource_receipt"
+                    or record.get("resource_outcome") != recovery.get("resource_outcome")
+                ):
+                    raise ValueError(
+                        "counterparty recovery settlement does not retain its terminal"
+                    )
             roots = _adapter_roots(decision, admission_trust_roots_by_adapter)
             if record.get("basis") == "resource_receipt":
                 if fence is None:
@@ -1499,6 +1679,13 @@ def verify_execution_bundle(
     checks["canonical_prefix"] = "valid"
 
     try:
+        registration_raw = bundle["enforcement_point_registration"]
+        if (
+            not isinstance(registration_raw, Mapping)
+            or not isinstance(registration_raw.get("enforcement_point_id"), str)
+            or not isinstance(registration_raw.get("public_key"), str)
+        ):
+            raise ValueError("enforcement-point registration is missing its identity or public key")
         retained_decisions = {
             record["record_hash"]: record
             for record in records
@@ -1510,6 +1697,8 @@ def verify_execution_bundle(
             admission_trust_roots_by_adapter=admission_trust_roots_by_adapter,
             expected_domain=expected_domain,
             expected_ledger_id=expected_ledger_id,
+            enforcement_point_id=registration_raw["enforcement_point_id"],
+            enforcement_point_public_key=registration_raw["public_key"],
         )
         decision = _decision_for_operation(records, operation_id)
         descriptor = decision["consumption"]["operation"]

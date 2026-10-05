@@ -8,6 +8,13 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Add public bilateral recovery verification. Strict helpers verify fresh
+  A-signed query/cancel requests and B `counterparty_cancelled` evidence under
+  caller-pinned schema-5 admission roots. Canonical execution replay now checks
+  cancellation-before-native-fence exclusion and A `counterparty_recovered`
+  joins to fresh owner authentication, the original fence, the recovery
+  request, the B-signed terminal, and the final settlement.
+
 - Dispatch claims in every resource profile may carry the revocation identity
   the decision stood on: `delegation_jtis` (the validated delegation jti chain,
   nearest grant first) and `revocation_epoch` (the store's epoch at ALLOW).

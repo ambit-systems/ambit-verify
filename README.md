@@ -150,6 +150,18 @@ single-use `resume_authentication_hash` of its preceding authenticated
 `counterparty_resume` request. That retained proof-free request binds the
 exact pending acknowledgment, raw context artifact, and B approval token.
 
+Counterparty recovery adds two canonical events to that replay. B's
+`counterparty_cancelled` proves a fresh A-signed cancel against B's
+caller-pinned schema-5 admission before any native B dispatch fence; it excludes
+every later use of the same foreign point/operation identity. A's
+`counterparty_recovered` joins a fresh owner-authenticated reconciliation, the
+original A counterparty fence, A's signed recovery request, and the B-signed
+terminal before settlement. `verify_execution_bundle` replays both joins and
+rejects cancellation after a native fence, reused owner authentication, a
+different dispatch, or a terminal that does not match the recovered record.
+Public helpers in `ambit_verify.counterparty_recovery` expose the strict request,
+cancellation, and record grammar checks without importing Authority or Core.
+
 Each check is an explicit three-state string: `valid`, `failed`, or
 `not_established`. A malformed or contradictory retained artifact makes the
 check that attempted to verify it `failed`; absent or unresolved future-phase

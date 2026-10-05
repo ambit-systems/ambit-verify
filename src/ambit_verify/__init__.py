@@ -48,6 +48,13 @@ from .consumption import (
     required_account_bounds,
     validate_consumption_record,
 )
+from .counterparty_recovery import (
+    counterparty_foreign_dispatch_identity,
+    validate_counterparty_cancellation_record_shape,
+    validate_counterparty_recovery_record,
+    verify_counterparty_cancellation_record,
+    verify_counterparty_recovery_request,
+)
 from .credential_evidence import ReceiptCredentialVerification, verify_receipt_credentials
 from .execution_evidence import ExecutionBundleVerification, verify_execution_bundle
 from .hashing import canonical_json_bytes, hash_object
@@ -169,6 +176,7 @@ __all__ = [
     "counterparty_destination_hash",
     "counterparty_foreign_descriptor",
     "counterparty_foreign_descriptor_hash",
+    "counterparty_foreign_dispatch_identity",
     "counterparty_operation_hash",
     "counterparty_pending_ack_approval_expectations",
     "counterparty_pending_ack_message",
@@ -190,14 +198,18 @@ __all__ = [
     "resource_binding_hash",
     "validate_authority_admission_claims",
     "validate_consumption_record",
+    "validate_counterparty_cancellation_record_shape",
+    "validate_counterparty_recovery_record",
     "validate_delegation_chain",
     "verify_admitted_origin",
     "verify_admitted_path",
     "verify_authority_admission",
     "verify_chain",
     "verify_checkpoint",
+    "verify_counterparty_cancellation_record",
     "verify_counterparty_context",
     "verify_counterparty_pending_ack",
+    "verify_counterparty_recovery_request",
     "verify_cumulative_status_payload",
     "verify_dispatch",
     "verify_execution_authority",
