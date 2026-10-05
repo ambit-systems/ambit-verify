@@ -854,21 +854,22 @@ def _replay_prefix(
                         else None
                     )
                     points = admission.claims.get("trusted_counterparty_points")
-                    if not isinstance(raw_foreign_dispatch, str) or not isinstance(
-                        points, Mapping
-                    ):
+                    if not isinstance(raw_foreign_dispatch, str) or not isinstance(points, Mapping):
                         raise ValueError(
                             "native foreign authorization lacks admitted dispatch evidence"
                         )
                     foreign_point_id, foreign_claims = counterparty_foreign_dispatch_identity(
                         raw_foreign_dispatch, points=points
                     )
-                    foreign_identity = (foreign_point_id, foreign_claims["operation_id"])
-                    if foreign_identity in foreign_cancellations:
+                    authorized_foreign_identity = (
+                        foreign_point_id,
+                        foreign_claims["operation_id"],
+                    )
+                    if authorized_foreign_identity in foreign_cancellations:
                         raise ValueError(
                             "canonical prefix authorizes a cancelled foreign operation"
                         )
-                    foreign_authorizations[operation_id] = foreign_identity
+                    foreign_authorizations[operation_id] = authorized_foreign_identity
                 declared = {
                     (item["namespace"], item["identifier"], _moment(item["expires_at"]))
                     for item in consumption["consumed_identifiers"]
@@ -1095,7 +1096,8 @@ def _replay_prefix(
                 else None
             )
             if (
-                authentication is None
+                not isinstance(authentication_hash, str)
+                or authentication is None
                 or authentication.get("seq", 0) >= record.get("seq", 0)
                 or authentication.get("operation") != operation
                 or authentication_hash in consumed_recovery_authentication_hashes
@@ -1103,9 +1105,7 @@ def _replay_prefix(
                 raise ValueError("counterparty recovery lacks fresh preceding owner authentication")
             dispatch_token = fence.get("dispatch_token")
             dispatch_claims = fence.get("dispatch_claims")
-            if not isinstance(dispatch_token, str) or not isinstance(
-                dispatch_claims, Mapping
-            ):
+            if not isinstance(dispatch_token, str) or not isinstance(dispatch_claims, Mapping):
                 raise ValueError(
                     "counterparty recovery original fence lacks signed dispatch evidence"
                 )
@@ -1154,9 +1154,7 @@ def _replay_prefix(
                 expected_ledger_id=expected_ledger_id,
                 at=_moment(source.get("evaluated_at")),
             ).admission
-            binding = (
-                admission.claims.get("resource_binding") if admission is not None else None
-            )
+            binding = admission.claims.get("resource_binding") if admission is not None else None
             outcome_key = (
                 binding.get("outcome_public_key") if isinstance(binding, Mapping) else None
             )
@@ -1209,11 +1207,11 @@ def _replay_prefix(
                 ):
                     raise ValueError("signed dispatch fence does not join its exact operation")
                 _action_and_payload(decision, record)
-            foreign_identity = foreign_authorizations.get(operation_id)
-            if foreign_identity is not None:
-                if foreign_identity in foreign_cancellations:
+            fenced_foreign_identity = foreign_authorizations.get(operation_id)
+            if fenced_foreign_identity is not None:
+                if fenced_foreign_identity in foreign_cancellations:
                     raise ValueError("B dispatch fence follows a foreign operation cancellation")
-                foreign_fences.add(foreign_identity)
+                foreign_fences.add(fenced_foreign_identity)
             if operation_states.get(operation_id) != "authorized":
                 raise ValueError("dispatch fence is not the first authorized lifecycle transition")
             operation_states[operation_id] = "fenced"
@@ -1311,10 +1309,10 @@ def _replay_prefix(
                 if isinstance(admission_evidence, Mapping)
                 else None
             )
-            source: Mapping[str, Any] = decision
+            pending_source: Mapping[str, Any] = decision
             retained = decision.get("decision")
             if isinstance(retained, Mapping):
-                source = retained
+                pending_source = retained
             admission = (
                 verify_authority_admission(
                     admission_token,
@@ -1323,7 +1321,7 @@ def _replay_prefix(
                     ),
                     expected_domain=expected_domain,
                     expected_ledger_id=expected_ledger_id,
-                    at=_moment(source.get("evaluated_at")),
+                    at=_moment(pending_source.get("evaluated_at")),
                 ).admission
                 if isinstance(admission_token, str)
                 else None
@@ -1387,14 +1385,11 @@ def _replay_prefix(
                         raise ValueError("pre-fence settlement does not retain its earlier intent")
             else:
                 recovery = recovered.get(operation_id)
-                if (
-                    fence is None
-                    or (
-                        operation_states.get(operation_id) != "fenced"
-                        and not (
-                            recovery is not None
-                            and operation_states.get(operation_id) in {"fenced", "pending"}
-                        )
+                if fence is None or (
+                    operation_states.get(operation_id) != "fenced"
+                    and not (
+                        recovery is not None
+                        and operation_states.get(operation_id) in {"fenced", "pending"}
                     )
                 ):
                     raise ValueError(

@@ -150,7 +150,7 @@ def counterparty_foreign_dispatch_identity(
             continue
         try:
             claims = _point_dispatch(foreign_dispatch, point_id=point_id, point=point)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
         candidates.append((point_id, claims))
     if len(candidates) != 1:
