@@ -54,6 +54,7 @@ def _status(
     revoked: bool = False,
     epoch: int = 7,
     root: str = "a-status-root",
+    request_nonce: str | None = None,
 ) -> dict[str, object]:
     unsigned = RevocationStatus(
         is_revoked=revoked,
@@ -63,10 +64,16 @@ def _status(
         verifiable=True,
         trust_root_id=root,
         revocation_epoch=epoch,
+        request_nonce=request_nonce,
     )
     signature = key.sign(
         signed_status_bytes(
-            revocation_attestation_payload(unsigned, jti), context="ambit.revocation.status.v1"
+            revocation_attestation_payload(unsigned, jti),
+            context=(
+                "ambit.revocation.status.v2"
+                if request_nonce is not None
+                else "ambit.revocation.status.v1"
+            ),
         )
     )
     return status_artefact(
@@ -216,6 +223,42 @@ def test_signed_foreign_dependency_and_clearance_verify() -> None:
         policy=material["policy"],
         terminal_recorded_at="2026-10-03T12:00:05Z",
     )
+
+
+def test_request_bound_foreign_status_verifies_and_nonce_substitution_fails() -> None:
+    material = _material()
+    statuses = material["evidence"]["statuses"]
+    for index, jti in enumerate(("a-leaf", "a-parent")):
+        statuses[index] = _status(
+            material["status_key"],
+            jti=jti,
+            at=material["base"] + timedelta(seconds=index + 2),
+            request_nonce=f"{index + 1:064x}",
+        )
+    verify_foreign_revocation_evidence(
+        material["evidence"],
+        native_dispatch_claims=material["native"],
+        policy=material["policy"],
+        terminal_recorded_at="2026-10-03T12:00:05Z",
+    )
+
+    statuses[0]["request_nonce"] = "f" * 64
+    with pytest.raises(ValueError, match="attestation does not verify"):
+        verify_foreign_revocation_evidence(
+            material["evidence"],
+            native_dispatch_claims=material["native"],
+            policy=material["policy"],
+            terminal_recorded_at="2026-10-03T12:00:05Z",
+        )
+
+    statuses[0]["request_nonce"] = None
+    with pytest.raises(ValueError, match="malformed"):
+        verify_foreign_revocation_evidence(
+            material["evidence"],
+            native_dispatch_claims=material["native"],
+            policy=material["policy"],
+            terminal_recorded_at="2026-10-03T12:00:05Z",
+        )
 
 
 def test_policy_age_bound_clears_when_a_and_b_omit_optional_bounds() -> None:

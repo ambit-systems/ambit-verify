@@ -22,6 +22,16 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from .hashing import canonical_iso, canonical_json_bytes
 
 REVOCATION_CONTEXT = "ambit.revocation.status.v1"
+REVOCATION_CONTEXT_V2 = "ambit.revocation.status.v2"
+
+
+def valid_revocation_request_nonce(value: object) -> bool:
+    """Accept one 256-bit lowercase hexadecimal request challenge."""
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 @dataclass(frozen=True)
@@ -43,6 +53,7 @@ class RevocationStatus:
     attestation: str | None = None
     trust_root_id: str | None = None
     revocation_epoch: int | None = None
+    request_nonce: str | None = None
 
 
 # An unreachable store reports this via ``source``; never as staleness.
@@ -79,6 +90,12 @@ def revocation_attestation_payload(status: RevocationStatus, jti: str) -> dict[s
     }
     if status.revocation_epoch is not None:
         payload["revocation_epoch"] = status.revocation_epoch
+    if status.request_nonce is not None:
+        if not valid_revocation_request_nonce(status.request_nonce):
+            raise ValueError("revocation request nonce is invalid")
+        if status.revocation_epoch is None:
+            raise ValueError("request-bound revocation status requires an epoch")
+        payload["request_nonce"] = status.request_nonce
     return payload
 
 
@@ -88,11 +105,10 @@ def verify_revocation_attestation(status: RevocationStatus, jti: str, public_key
         return False
     try:
         signature = base64.b64decode(status.attestation.removeprefix("ed25519:"), validate=True)
+        context = REVOCATION_CONTEXT_V2 if status.request_nonce is not None else REVOCATION_CONTEXT
         Ed25519PublicKey.from_public_bytes(public_key).verify(
             signature,
-            signed_status_bytes(
-                revocation_attestation_payload(status, jti), context=REVOCATION_CONTEXT
-            ),
+            signed_status_bytes(revocation_attestation_payload(status, jti), context=context),
         )
     except InvalidSignature, ValueError:
         return False
@@ -101,10 +117,12 @@ def verify_revocation_attestation(status: RevocationStatus, jti: str, public_key
 
 __all__ = [
     "REVOCATION_CONTEXT",
+    "REVOCATION_CONTEXT_V2",
     "REVOCATION_SOURCE_UNAVAILABLE_SUFFIX",
     "RevocationStatus",
     "revocation_attestation_payload",
     "revocation_source_unavailable",
     "signed_status_bytes",
+    "valid_revocation_request_nonce",
     "verify_revocation_attestation",
 ]

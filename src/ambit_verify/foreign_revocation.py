@@ -448,6 +448,7 @@ def _verify_statuses(
         if not isinstance(raw, Mapping) or set(raw) not in {
             _STATUS_FIELDS,
             _STATUS_FIELDS | {"revocation_epoch"},
+            _STATUS_FIELDS | {"revocation_epoch", "request_nonce"},
         }:
             raise ValueError("foreign revocation status is malformed")
         try:

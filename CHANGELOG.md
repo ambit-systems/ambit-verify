@@ -8,6 +8,10 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Verify request-bound revocation status under a distinct version 2 signing
+  context. Retained version 1 status evidence keeps its original signature
+  rules. Foreign clearance replay accepts the signed version 2 artefact.
+
 - Add public bilateral recovery verification. Strict helpers verify fresh
   A-signed query/cancel requests and B `counterparty_cancelled` evidence under
   caller-pinned schema-5 admission roots. Canonical execution replay now checks

@@ -22,7 +22,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from .claim_shapes import _parse_dt
 from .hashing import canonical_iso, canonical_json_bytes, sha256_hex
-from .revocation_types import RevocationStatus, signed_status_bytes
+from .revocation_types import (
+    RevocationStatus,
+    signed_status_bytes,
+    valid_revocation_request_nonce,
+)
 
 CUMULATIVE_STATUS_CONTEXT = "ambit.cumulative.status.v1"
 
@@ -78,6 +82,12 @@ def status_artefact(status: RevocationStatus, jti: str) -> dict[str, Any]:
     }
     if status.revocation_epoch is not None:
         artefact["revocation_epoch"] = status.revocation_epoch
+    if status.request_nonce is not None:
+        if not valid_revocation_request_nonce(status.request_nonce):
+            raise ValueError("status request nonce is invalid")
+        if status.revocation_epoch is None:
+            raise ValueError("request-bound status requires an epoch")
+        artefact["request_nonce"] = status.request_nonce
     return artefact
 
 
@@ -120,7 +130,11 @@ def _status_from_evidence(artefact: Mapping[str, Any]) -> RevocationStatus:
         "attestation",
         "trust_root_id",
     }
-    if set(artefact) not in (required, required | {"revocation_epoch"}):
+    if set(artefact) not in (
+        required,
+        required | {"revocation_epoch"},
+        required | {"revocation_epoch", "request_nonce"},
+    ):
         raise ValueError("status evidence has unsupported or missing fields")
     if not isinstance(artefact["jti"], str) or not artefact["jti"]:
         raise ValueError("status evidence jti is invalid")
@@ -142,6 +156,9 @@ def _status_from_evidence(artefact: Mapping[str, Any]) -> RevocationStatus:
     epoch = artefact.get("revocation_epoch")
     if epoch is not None and (not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0):
         raise ValueError("status evidence revocation_epoch is invalid")
+    request_nonce = artefact.get("request_nonce")
+    if "request_nonce" in artefact and not valid_revocation_request_nonce(request_nonce):
+        raise ValueError("status evidence request nonce is invalid")
     return RevocationStatus(
         is_revoked=artefact["is_revoked"],
         checked_at=_parse_dt(str(artefact["checked_at"])),
@@ -151,6 +168,7 @@ def _status_from_evidence(artefact: Mapping[str, Any]) -> RevocationStatus:
         attestation=artefact["attestation"],
         trust_root_id=artefact["trust_root_id"],
         revocation_epoch=epoch,
+        request_nonce=request_nonce,
     )
 
 
