@@ -946,13 +946,24 @@ def dispatch_max_revocation_age_ms(claims: Mapping[str, Any]) -> int | None:
 
 def _foreign_revocation_evidence(value: object) -> None:
     """Validate the closed terminal syntax for B's final foreign clearance."""
-    if not isinstance(value, Mapping) or set(value) != {
+    base_fields = {
         "foreign_dispatch_hash",
         "policy_hash",
         "statuses",
         "checked_at",
-    }:
+    }
+    if not isinstance(value, Mapping) or set(value) not in (
+        base_fields,
+        base_fields | {"fence_request", "fence_grant"},
+    ):
         raise ValueError("resource outcome foreign revocation evidence is invalid")
+    if "fence_request" in value and (
+        not isinstance(value["fence_request"], str)
+        or not value["fence_request"]
+        or not isinstance(value["fence_grant"], str)
+        or not value["fence_grant"]
+    ):
+        raise ValueError("resource outcome foreign revocation fence evidence is invalid")
     _digest(
         value.get("foreign_dispatch_hash"),
         "resource outcome foreign revocation evidence dispatch hash",

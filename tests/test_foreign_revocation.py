@@ -22,6 +22,7 @@ from ambit_verify.foreign_revocation import (
 )
 from ambit_verify.hashing import canonical_iso, canonical_json_bytes, hash_object
 from ambit_verify.resource_protocol import dispatch_message
+from ambit_verify.revocation_fence import FENCE_PROFILE, fence_message, fence_request_hash
 from ambit_verify.revocation_types import (
     RevocationStatus,
     revocation_attestation_payload,
@@ -43,6 +44,12 @@ def _slip(key: Ed25519PrivateKey, claims: dict[str, object]) -> str:
 def _dispatch(key: Ed25519PrivateKey, claims: dict[str, object]) -> str:
     encoded = base64.urlsafe_b64encode(canonical_json_bytes(claims)).rstrip(b"=").decode("ascii")
     signature = key.sign(dispatch_message(claims))
+    return f"{encoded}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode('ascii')}"
+
+
+def _fence_token(key: Ed25519PrivateKey, claims: dict[str, object], *, grant: bool) -> str:
+    encoded = base64.urlsafe_b64encode(canonical_json_bytes(claims)).rstrip(b"=").decode("ascii")
+    signature = key.sign(fence_message(claims, grant=grant))
     return f"{encoded}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode('ascii')}"
 
 
@@ -223,6 +230,57 @@ def test_signed_foreign_dependency_and_clearance_verify() -> None:
         policy=material["policy"],
         terminal_recorded_at="2026-10-03T12:00:05Z",
     )
+
+
+def test_signed_fence_is_bound_to_native_operation_and_a_chain() -> None:
+    material = _material()
+    native = material["native"]
+    dependency = verify_foreign_dependency(native, material["policy"])
+    assert dependency is not None
+    request = {
+        "version": 1,
+        "profile": FENCE_PROFILE,
+        "a_dispatch": dependency.raw_dispatch,
+        "b_dispatch_hash": "a" * 64,
+        "b_operation_id": native["operation_id"],
+        "b_domain_id": native["domain_id"],
+        "b_ledger_id": native["ledger_id"],
+        "b_resource_id": native["resource_id"],
+        "b_resource_binding_hash": native["resource_binding_hash"],
+        "customer_id": native["customer_id"],
+        "payload_hash": native["payload_hash"],
+    }
+    request_token = _fence_token(Ed25519PrivateKey.generate(), request, grant=False)
+    grant = {
+        "version": 1,
+        "profile": FENCE_PROFILE,
+        "request_hash": fence_request_hash(request_token),
+        "a_dispatch_hash": dependency.dispatch_hash,
+        "b_dispatch_hash": request["b_dispatch_hash"],
+        "delegation_jtis": list(dependency.foreign_delegation_jtis),
+        "revocation_epoch": 7,
+        "prepared_at": "2026-10-03T12:00:03Z",
+        "trust_root_id": "a-status-root",
+    }
+    evidence = {
+        **material["evidence"],
+        "fence_request": request_token,
+        "fence_grant": _fence_token(material["status_key"], grant, grant=True),
+    }
+    verify_foreign_revocation_evidence(
+        evidence,
+        native_dispatch_claims=native,
+        policy=material["policy"],
+        terminal_recorded_at="2026-10-03T12:00:05Z",
+    )
+    changed_native = dict(native, operation_id="other-operation")
+    with pytest.raises(ValueError, match="request differs"):
+        verify_foreign_revocation_evidence(
+            evidence,
+            native_dispatch_claims=changed_native,
+            policy=material["policy"],
+            terminal_recorded_at="2026-10-03T12:00:05Z",
+        )
 
 
 def test_request_bound_foreign_status_verifies_and_nonce_substitution_fails() -> None:

@@ -27,6 +27,11 @@ from .resource_protocol import (
     validate_counterparty_ingress_url,
     verify_dispatch,
 )
+from .revocation_fence import (
+    fence_request_hash,
+    unverified_fence_claims,
+    verify_fence_token,
+)
 from .revocation_types import revocation_source_unavailable, verify_revocation_attestation
 from .status_evidence import _status_from_evidence, _status_public_key
 from .tokens_slips import parse_delegation
@@ -495,12 +500,16 @@ def verify_foreign_revocation_evidence(
         if evidence is not None:
             raise ValueError("ordinary dispatch must not carry foreign revocation evidence")
         return
-    if not isinstance(evidence, Mapping) or set(evidence) != {
+    base_fields = {
         "foreign_dispatch_hash",
         "policy_hash",
         "statuses",
         "checked_at",
-    }:
+    }
+    if not isinstance(evidence, Mapping) or set(evidence) not in (
+        base_fields,
+        base_fields | {"fence_request", "fence_grant"},
+    ):
         raise ValueError("foreign revocation evidence fields are invalid")
     _digest(evidence.get("foreign_dispatch_hash"), "foreign revocation evidence dispatch hash")
     _digest(evidence.get("policy_hash"), "foreign revocation evidence policy hash")
@@ -527,6 +536,44 @@ def verify_foreign_revocation_evidence(
     if recorded_at >= foreign_not_after or recorded_at >= native_not_after:
         raise ValueError("terminal was recorded outside strict dispatch validity")
     _verify_statuses(evidence["statuses"], dependency, checked_at)
+    if "fence_request" in evidence:
+        request_token = evidence["fence_request"]
+        grant_token = evidence["fence_grant"]
+        request = unverified_fence_claims(request_token, grant=False)
+        candidate = unverified_fence_claims(grant_token, grant=True)
+        roots = dependency.point_policy["revocation_trust_roots"]
+        root = roots.get(candidate["trust_root_id"])
+        if root is None:
+            raise ValueError("foreign fence grant root is untrusted")
+        public_key = root.get("public_key") if isinstance(root, Mapping) else root
+        if not isinstance(public_key, (str, bytes)):
+            raise ValueError("foreign fence grant public key is invalid")
+        grant = verify_fence_token(grant_token, public_key=public_key, grant=True)
+        expected_request = {
+            "a_dispatch": dependency.raw_dispatch,
+            "b_operation_id": native_dispatch_claims.get("operation_id"),
+            "b_domain_id": native_dispatch_claims.get("domain_id"),
+            "b_ledger_id": native_dispatch_claims.get("ledger_id"),
+            "b_resource_id": native_dispatch_claims.get("resource_id"),
+            "b_resource_binding_hash": native_dispatch_claims.get("resource_binding_hash"),
+            "customer_id": native_dispatch_claims.get("customer_id"),
+            "payload_hash": native_dispatch_claims.get("payload_hash"),
+        }
+        if any(request.get(field) != value for field, value in expected_request.items()):
+            raise ValueError("foreign fence request differs from native operation")
+        expected_grant = {
+            "request_hash": fence_request_hash(request_token),
+            "a_dispatch_hash": dependency.dispatch_hash,
+            "b_dispatch_hash": request["b_dispatch_hash"],
+            "delegation_jtis": list(dependency.foreign_delegation_jtis),
+        }
+        if any(grant.get(field) != value for field, value in expected_grant.items()):
+            raise ValueError("foreign fence grant differs from A chain or B operation")
+        if grant["revocation_epoch"] < dependency.foreign_revocation_epoch:
+            raise ValueError("foreign fence grant epoch is below the A dispatch")
+        prepared_at = _time(grant["prepared_at"], "foreign fence prepared_at")
+        if prepared_at > checked_at:
+            raise ValueError("foreign fence grant was prepared after B gate time")
 
 
 __all__ = [
