@@ -8,6 +8,21 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Define signed customer-delete revocation fence tokens in
+  `ambit_verify.revocation_fence`. The module provides the
+  `customer-delete-fence/1` request and grant claim validators,
+  `fence_request_hash`, `fence_message` (domain-separated signing input),
+  `verify_fence_token`, and `unverified_fence_claims`.
+- Verify foreign customer-delete fence evidence. A terminal's
+  `foreign_revocation_evidence` is either `{foreign_dispatch_hash, policy_hash,
+  statuses, checked_at}` or those fields plus `{fence_request, fence_grant}`.
+  When both fence fields are present, verification checks the grant signature
+  under a trust root of A's pinned point policy. It also checks that the request
+  names the native B operation and the raw A dispatch, that the grant joins the
+  request hash, the A dispatch hash and the A delegation chain, that the grant
+  epoch is not below the A dispatch epoch, and that the grant was prepared
+  before the B gate time. The verifier does not check B's signature on the
+  fence request offline.
 - Verify request-bound revocation status under a distinct version 2 signing
   context. Retained version 1 status evidence keeps its original signature
   rules. Foreign clearance replay accepts the signed version 2 artefact.
@@ -79,7 +94,8 @@ follows [Semantic Versioning](https://semver.org/).
   are rejected.
 - Customer-delete terminal syntax now accepts the closed optional
   `foreign_revocation_evidence` object
-  `{foreign_dispatch_hash, policy_hash, statuses, checked_at}`. The terminal
+  `{foreign_dispatch_hash, policy_hash, statuses, checked_at}`, or those fields
+  plus `fence_request` and `fence_grant`. The terminal
   parser validates its exact field types while shared foreign-revocation
   verification checks the signed A dependency, statuses, gate time, and
   committed-terminal requirement. A signed `not_executed` terminal may omit

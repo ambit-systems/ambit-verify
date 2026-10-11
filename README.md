@@ -245,16 +245,27 @@ consent, `foreign_dependency` is a closed signed object with the exact raw A
 dispatch and the B policy hash; raw A dispatches cannot nest another foreign
 dependency. A committed foreign B terminal carries the closed signed
 `foreign_revocation_evidence` object
-`{foreign_dispatch_hash, policy_hash, statuses, checked_at}`. Public replay
+`{foreign_dispatch_hash, policy_hash, statuses, checked_at}`, or those fields
+plus `{fence_request, fence_grant}`. Each status is a version 1 status or a
+version 2 status that carries a request nonce. Public replay
 rederives the signed B policy, joins the raw A bytes and hash to the native B
 dispatch and retained A artifact, and validates every A status at the one gate
 time under A's independent roots and epoch floor. A signed `not_executed`
 foreign terminal may omit clearance; any clearance it does carry is verified
 with the same strict rules.
 
-This proves the authenticated final A read precedes the recorded B terminal,
-not distributed atomicity: either authority can revoke after its last
-authenticated observation and before the physical B delete.
+A valid result shows fence ordering only when both fence fields are present.
+It shows request binding only when the statuses carry a nonce. Offline replay
+does not check B's signature on the fence request.
+
+This proves the authenticated final A read precedes the recorded B terminal.
+With fence evidence, it also proves A granted the fence before B's gate time.
+It does not prove distributed atomicity. When every A revocation writer uses
+the fenced store and every B delete uses B's door, an A revocation that commits
+before A grants the fence makes prepare refuse, and a revocation attempted
+while the fence is open returns `202 pending`. These residuals remain: B's own
+local read-to-commit window, A revocation writers outside the fenced store,
+routes that bypass B's door, and other resources.
 
 `before_hash` is the SHA-256 fingerprint of the canonical removed synthetic
 customer row. It carries no raw customer data, but it can still be a guessable
