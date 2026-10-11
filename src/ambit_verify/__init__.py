@@ -28,6 +28,7 @@ so a pass under it proves nothing against the writer.
 from __future__ import annotations
 
 from .admission import (
+    ADMITTED_PATH_FAILURE_CODES,
     AdmissionVerification,
     AuthorityAdmission,
     ExecutionAuthorityVerification,
@@ -129,6 +130,7 @@ from .verify import (
 __version__ = "0.1.0"
 
 __all__ = [
+    "ADMITTED_PATH_FAILURE_CODES",
     "CONSUMPTION_PROFILE",
     "COUNTERPARTY_CONTEXT_CONTEXT",
     "COUNTERPARTY_CONTEXT_PROFILE",

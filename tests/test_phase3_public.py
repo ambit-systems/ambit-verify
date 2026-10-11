@@ -10,6 +10,7 @@ import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import NamedTuple
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -255,9 +256,28 @@ def _sign_slip(key: Ed25519PrivateKey, claims: dict[str, object], *, context: st
     return f"{encoded}.ed25519:{base64.b64encode(signature).decode('ascii')}"
 
 
+class _TwoRootChain(NamedTuple):
+    """The minted admitted origin, its root-B child, and root A's signing material."""
+
+    admission: AuthorityAdmission
+    origin_token: str
+    child_token: str
+    artifacts: dict[str, bytes]
+    at: datetime
+    issuer_key: Ed25519PrivateKey
+    issuer_root: str
+    child_claims: dict[str, object]
+
+
 def _build_two_root_admitted_chain() -> tuple[
     AuthorityAdmission, str, str, dict[str, bytes], datetime
 ]:
+    """Return the admitted origin and its root-B child from :func:`_mint_two_root_chain`."""
+    chain = _mint_two_root_chain()
+    return chain.admission, chain.origin_token, chain.child_token, chain.artifacts, chain.at
+
+
+def _mint_two_root_chain() -> _TwoRootChain:
     """Mint a complete admitted origin and one child delegation, signed under two roots.
 
     Everything the admitted path needs is minted here: the authority entry, its
@@ -265,7 +285,8 @@ def _build_two_root_admitted_chain() -> tuple[
     issued origin grant -- all under root A (the origin issuer) and the ratifier's
     own root. The returned child delegation is signed under root B, a third,
     unrelated key, so a caller can hold every other axis fixed and vary only the
-    signer.
+    signer. Root A's key and the child's claims are returned so a caller can
+    re-sign a varied child under the origin issuer.
     """
     base = datetime(2026, 1, 1, tzinfo=UTC)
     ratified_at = base + timedelta(days=1)
@@ -446,7 +467,16 @@ def _build_two_root_admitted_chain() -> tuple[
         "status-0.json": json.dumps(status_artefact_dict).encode("utf-8"),
         "grant.slip": origin_token.encode("utf-8"),
     }
-    return admission, origin_token, child_token, artifacts, at
+    return _TwoRootChain(
+        admission,
+        origin_token,
+        child_token,
+        artifacts,
+        at,
+        issuer_key,
+        issuer_root,
+        child_claims,
+    )
 
 
 def test_admitted_path_refuses_a_child_signed_under_a_second_root() -> None:

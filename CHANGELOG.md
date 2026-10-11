@@ -8,6 +8,17 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `OriginVerification` carries `codes`, a tuple of stable failure codes.
+  Every invalid result of `verify_admitted_path` and `verify_admitted_origin`
+  names exactly one code from `ADMITTED_PATH_FAILURE_CODES`:
+  `origin_artifact_invalid`, `origin_signer_mismatch`,
+  `delegation_signature_invalid`, `delegation_window_not_covered`,
+  `delegation_chain_invalid`, `git_ref_not_covered`, or
+  `verification_input_invalid` (a naive comparison time or an admission
+  without credential roots). A consumer can now tell an expired slip, a
+  tampered signature, a second-root signer and a widened child apart without
+  parsing `errors`. The field defaults to empty, valid results carry no codes,
+  and no validity outcome or error text changes.
 - Define signed customer-delete revocation fence tokens in
   `ambit_verify.revocation_fence`. The module provides the
   `customer-delete-fence/1` request and grant claim validators,

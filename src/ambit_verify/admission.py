@@ -86,6 +86,25 @@ _ROOT_FIELDS = (
 )
 _TRUST_CONFIGURATION_FIELDS = (*_ROOT_FIELDS, "trusted_counterparty_points")
 
+_ORIGIN_ARTIFACT_INVALID = "origin_artifact_invalid"
+_ORIGIN_SIGNER_MISMATCH = "origin_signer_mismatch"
+_DELEGATION_SIGNATURE_INVALID = "delegation_signature_invalid"
+_DELEGATION_WINDOW_NOT_COVERED = "delegation_window_not_covered"
+_DELEGATION_CHAIN_INVALID = "delegation_chain_invalid"
+_GIT_REF_NOT_COVERED = "git_ref_not_covered"
+_VERIFICATION_INPUT_INVALID = "verification_input_invalid"
+ADMITTED_PATH_FAILURE_CODES = frozenset(
+    {
+        _ORIGIN_ARTIFACT_INVALID,
+        _ORIGIN_SIGNER_MISMATCH,
+        _DELEGATION_SIGNATURE_INVALID,
+        _DELEGATION_WINDOW_NOT_COVERED,
+        _DELEGATION_CHAIN_INVALID,
+        _GIT_REF_NOT_COVERED,
+        _VERIFICATION_INPUT_INVALID,
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class AuthorityAdmission:
@@ -119,11 +138,17 @@ class AdmissionVerification:
 
 @dataclass(frozen=True, slots=True)
 class OriginVerification:
-    """Outcome of validating the origin portion of an admitted path."""
+    """Outcome of validating the origin portion of an admitted path.
+
+    An invalid result names its failure class first in ``codes``, drawn from
+    :data:`ADMITTED_PATH_FAILURE_CODES`; ``errors`` keeps the explanatory text.
+    A valid result has no codes.
+    """
 
     valid: bool
     origin_grant_hash: str | None
     errors: tuple[str, ...] = ()
+    codes: tuple[str, ...] = ()
 
 
 def _digest(value: Any, *, size: int = 64) -> bool:
@@ -528,11 +553,16 @@ def _verify_admitted_origin_uncached(
     admission: AuthorityAdmission,
 ) -> OriginVerification:
     if not isinstance(origin_token, str) or not origin_token:
-        return OriginVerification(False, None, ("originating grant is missing",))
+        return OriginVerification(
+            False, None, ("originating grant is missing",), codes=(_ORIGIN_ARTIFACT_INVALID,)
+        )
     origin_hash = sha256_hex(origin_token.encode("utf-8"))
     if origin_hash not in admission.claims.get("origin_grant_hashes", ()):
         return OriginVerification(
-            False, origin_hash, ("originating grant was not independently admitted",)
+            False,
+            origin_hash,
+            ("originating grant was not independently admitted",),
+            codes=(_ORIGIN_ARTIFACT_INVALID,),
         )
     try:
         grant_ok, grant = parse_delegation(
@@ -545,6 +575,7 @@ def _verify_admitted_origin_uncached(
             False,
             origin_hash,
             ("originating grant does not verify under admitted credential roots",),
+            codes=(_ORIGIN_ARTIFACT_INVALID,),
         )
     expected_audience = [admission.claims.get("enforcement_point_id")]
     if grant.aud != expected_audience:
@@ -552,10 +583,14 @@ def _verify_admitted_origin_uncached(
             False,
             origin_hash,
             ("originating grant audience must equal exactly the admitted enforcement point",),
+            codes=(_ORIGIN_ARTIFACT_INVALID,),
         )
     if artifacts.get(GRANT_FILE) != origin_token.encode("utf-8"):
         return OriginVerification(
-            False, origin_hash, ("completed bundle does not carry the exact originating grant",)
+            False,
+            origin_hash,
+            ("completed bundle does not carry the exact originating grant",),
+            codes=(_ORIGIN_ARTIFACT_INVALID,),
         )
     result = verify_ratification_bundle(
         artifacts,
@@ -563,7 +598,12 @@ def _verify_admitted_origin_uncached(
         revocation_trust_roots=admission.claims["revocation_attestation_public_keys"],
         registration_public_keys=admission.claims["credential_registration_public_keys"],
     )
-    return OriginVerification(result.ok, origin_hash, tuple(result.failures))
+    return OriginVerification(
+        result.ok,
+        origin_hash,
+        tuple(result.failures),
+        codes=() if result.ok else (_ORIGIN_ARTIFACT_INVALID,),
+    )
 
 
 def admission_configuration_matches(
@@ -604,6 +644,17 @@ class ExecutionAuthorityVerification:
     )
 
 
+def _chain_failure_code(reason: str) -> str:
+    """Classify a refusal reason written by the shared chain walk in ``tokens``."""
+    if reason.startswith("parent token ") and reason.endswith(" signature invalid"):
+        return _DELEGATION_SIGNATURE_INVALID
+    if reason.endswith(" is outside its validity window") or (
+        reason.startswith("scope widening at depth ") and ": time;" in reason
+    ):
+        return _DELEGATION_WINDOW_NOT_COVERED
+    return _DELEGATION_CHAIN_INVALID
+
+
 def verify_admitted_path(
     delegation_token: str,
     parent_tokens: Sequence[str],
@@ -621,31 +672,62 @@ def verify_admitted_path(
     """
     if not isinstance(at, datetime) or at.tzinfo is None or at.utcoffset() is None:
         return OriginVerification(
-            False, None, ("admitted path comparison time requires a timezone",)
+            False,
+            None,
+            ("admitted path comparison time requires a timezone",),
+            codes=(_VERIFICATION_INPUT_INVALID,),
         )
     if not isinstance(delegation_token, str) or not delegation_token:
-        return OriginVerification(False, None, ("delegation token is missing",))
+        return OriginVerification(
+            False, None, ("delegation token is missing",), codes=(_DELEGATION_CHAIN_INVALID,)
+        )
     if not isinstance(parent_tokens, Sequence) or isinstance(parent_tokens, (str, bytes)):
-        return OriginVerification(False, None, ("delegation ancestry must be a token sequence",))
+        return OriginVerification(
+            False,
+            None,
+            ("delegation ancestry must be a token sequence",),
+            codes=(_DELEGATION_CHAIN_INVALID,),
+        )
     parents = list(parent_tokens)
     if any(not isinstance(token, str) or not token for token in parents):
-        return OriginVerification(False, None, ("delegation ancestry contains an invalid token",))
+        return OriginVerification(
+            False,
+            None,
+            ("delegation ancestry contains an invalid token",),
+            codes=(_DELEGATION_CHAIN_INVALID,),
+        )
     roots = admission.claims.get("credential_trust_roots")
     if not isinstance(roots, Mapping):
-        return OriginVerification(False, None, ("admission carries no credential trust roots",))
+        return OriginVerification(
+            False,
+            None,
+            ("admission carries no credential trust roots",),
+            codes=(_VERIFICATION_INPUT_INVALID,),
+        )
     leaf_ok, leaf = parse_delegation(delegation_token, trust_roots=roots)
     if not leaf_ok or leaf is None:
         return OriginVerification(
-            False, None, ("delegation token does not verify under admitted roots",)
+            False,
+            None,
+            ("delegation token does not verify under admitted roots",),
+            codes=(_DELEGATION_SIGNATURE_INVALID,),
         )
     if not leaf.nbf <= at <= leaf.exp:
         return OriginVerification(
-            False, None, ("delegation token does not cover the comparison time",)
+            False,
+            None,
+            ("delegation token does not cover the comparison time",),
+            codes=(_DELEGATION_WINDOW_NOT_COVERED,),
         )
     chain = validate_delegation_chain(leaf, parents, trust_roots=roots, evaluation_time=at)
     if not chain.valid or chain.depth_exceeded:
         reason = chain.reason or "delegation chain exceeds its declared maximum depth"
-        return OriginVerification(False, None, (f"admitted delegation path is invalid: {reason}",))
+        return OriginVerification(
+            False,
+            None,
+            (f"admitted delegation path is invalid: {reason}",),
+            codes=(_chain_failure_code(chain.reason),),
+        )
     origin_token = parents[-1] if parents else delegation_token
     origin = verify_admitted_origin(origin_token, origin_artifacts, admission=admission)
     if not origin.valid:
@@ -662,15 +744,20 @@ def verify_admitted_path(
             False,
             origin.origin_grant_hash,
             ("admitted originating grant has no canonical Ed25519 signer",),
+            codes=(_DELEGATION_SIGNATURE_INVALID,),
         )
     for index, token in enumerate((delegation_token, *parents)):
-        if _verified_slip_signer_id(token, roots) != origin_signer:
+        signer = _verified_slip_signer_id(token, roots)
+        if signer != origin_signer:
             return OriginVerification(
                 False,
                 origin.origin_grant_hash,
                 (
                     f"delegation signer at path position {index} differs from "
                     f"admitted origin issuer",
+                ),
+                codes=(
+                    _DELEGATION_SIGNATURE_INVALID if signer is None else _ORIGIN_SIGNER_MISMATCH,
                 ),
             )
         if isinstance(git_ref, str):
@@ -680,6 +767,7 @@ def verify_admitted_path(
                     False,
                     origin.origin_grant_hash,
                     ("signed delegation does not cover the admitted Git ref",),
+                    codes=(_GIT_REF_NOT_COVERED,),
                 )
     return origin
 

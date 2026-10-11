@@ -108,6 +108,19 @@ refuses. The separately exposed per-receipt
 `verify_execution_authority` API continues to take one already-selected,
 singular `admission_trust_roots` map.
 
+`verify_admitted_path` and `verify_admitted_origin` return an
+`OriginVerification`. An invalid result names its failure class first in
+`codes`, drawn from the closed set `ADMITTED_PATH_FAILURE_CODES`:
+`origin_artifact_invalid` (origin grant, ratification bundle or audience join),
+`origin_signer_mismatch` (a hop signed by a key other than the origin issuer's),
+`delegation_signature_invalid`, `delegation_window_not_covered` (expired, not
+yet valid, or a child window outside its parent), `delegation_chain_invalid`
+(ancestry, parent links or attenuation), `git_ref_not_covered`, and
+`verification_input_invalid` (a defect in a caller-supplied input rather than
+in the presented evidence). A consumer classifies a refusal from the code and
+keeps `errors` for explanation. The codes do not change which paths verify, and
+a valid result carries none.
+
 For a schema-4 B admission, `trusted_counterparty_points` is signed B consent,
 not a trust map supplied by an execution bundle. Each point pins A's domain,
 ledger, resource id, and resource-binding hash as well as its enforcement key.
