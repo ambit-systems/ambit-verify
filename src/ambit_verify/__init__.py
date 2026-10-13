@@ -70,6 +70,11 @@ from .head_attestation import (
 )
 from .head_attestation_ed25519 import Ed25519CountersignVerifier, Ed25519HeadVerifier
 from .models import ApprovalClaims, Capability, DelegationClaims
+from .paired_bundles import (
+    ExecutionBundleTrust,
+    PairedBundleVerification,
+    verify_paired_execution_bundles,
+)
 from .ratification import RATIFICATION_RULE_VERSION, ratifier_reach_widening_axis
 from .ratification_bundle import BundleCheck, BundleVerification, verify_ratification_bundle
 from .receipt_links import (
@@ -156,6 +161,7 @@ __all__ = [
     "Ed25519CountersignVerifier",
     "Ed25519HeadVerifier",
     "ExecutionAuthorityVerification",
+    "ExecutionBundleTrust",
     "ExecutionBundleVerification",
     "ForeignDispatchVerification",
     "HeadAttestation",
@@ -163,6 +169,7 @@ __all__ = [
     "HmacHeadVerifier",
     "LedgerReadError",
     "OriginVerification",
+    "PairedBundleVerification",
     "ReceiptConsequence",
     "ReceiptCredentialVerification",
     "ReceiptLinkIssue",
@@ -217,6 +224,7 @@ __all__ = [
     "verify_execution_authority",
     "verify_execution_bundle",
     "verify_foreign_dispatch",
+    "verify_paired_execution_bundles",
     "verify_ratification_bundle",
     "verify_receipt_credentials",
     "verify_receipt_links",

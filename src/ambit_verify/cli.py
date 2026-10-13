@@ -340,6 +340,9 @@ def _credential_command(argv: Sequence[str]) -> int:
                     "does not trust bundled roots and establishes only the caller-pinned prefix"
                 ],
             }
+            if execution_result.foreign_dispatch_hash is not None:
+                report["foreign_dispatch_hash"] = execution_result.foreign_dispatch_hash
+                report["foreign_evidence_form"] = execution_result.foreign_evidence_form
         else:
             trust = strict_json_loads(_read_utf8_document(args.trust))
             if not isinstance(trust, Mapping):

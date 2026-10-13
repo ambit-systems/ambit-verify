@@ -987,6 +987,8 @@ def _verify_revocation_status(
         return f"revocation status for {jti} does not cover the retained comparison time"
     if not status.checked_at <= comparison_time <= status.checked_at + bound_delta:
         return f"revocation status for {jti} does not cover the retained comparison time"
+    if at - status.checked_at > bound_delta:
+        return f"revocation status for {jti} is not fresh at the sealed decision instant"
     if status.revocation_epoch is None or status.revocation_epoch < epoch_floor:
         return f"revocation status for {jti} is below the required epoch floor"
     return None

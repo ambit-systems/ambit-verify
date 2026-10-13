@@ -15,6 +15,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from ambit_verify.foreign_revocation import (
+    FOREIGN_EVIDENCE_FORM,
     ForeignRevocationRevokedError,
     project_foreign_revocation_policy,
     verify_foreign_dependency,
@@ -33,6 +34,7 @@ from ambit_verify.tokens_slips import SLIP_CONTEXT_DELEGATION
 
 _POINT_ID = "0123456789abcdef"
 _BINDING = "ab" * 32
+_RECORDED = "2026-10-03T12:00:06Z"
 
 
 def _slip(key: Ed25519PrivateKey, claims: dict[str, object]) -> str:
@@ -196,44 +198,28 @@ def _material() -> dict[str, Any]:
         "max_revocation_age_ms": 10_000,
         "foreign_dependency": {"dispatch": raw_a_dispatch, "policy_hash": hash_object(policy)},
     }
-    evidence = {
-        "foreign_dispatch_hash": hashlib.sha256(raw_a_dispatch.encode()).hexdigest(),
-        "policy_hash": hash_object(policy),
-        "statuses": [
-            _status(a_status_key, jti="a-leaf", at=base + timedelta(seconds=2)),
-            _status(a_status_key, jti="a-parent", at=base + timedelta(seconds=3)),
-        ],
-        "checked_at": canonical_iso(base + timedelta(seconds=4)),
-    }
-    return {
+    b_outcome_key = Ed25519PrivateKey.generate()
+    material: dict[str, Any] = {
         "base": base,
         "policy": policy,
         "a_claims": a_claims,
         "a_dispatch_key": a_dispatch_key,
         "native": native_claims,
-        "evidence": evidence,
         "status_key": a_status_key,
+        "outcome_key": b_outcome_key,
+        "outcome_public_key": b_outcome_key.public_key().public_bytes_raw().hex(),
     }
+    material["evidence"] = _evidence(material)
+    return material
 
 
-def test_signed_foreign_dependency_and_clearance_verify() -> None:
-    material = _material()
-    dependency = verify_foreign_dependency(material["native"], material["policy"])
-
-    assert dependency is not None
-    assert dependency.point_id == _POINT_ID
-    assert dependency.foreign_delegation_jtis == ("a-leaf", "a-parent")
-    assert dependency.foreign_revocation_epoch == 5
-    verify_foreign_revocation_evidence(
-        material["evidence"],
-        native_dispatch_claims=material["native"],
-        policy=material["policy"],
-        terminal_recorded_at="2026-10-03T12:00:05Z",
-    )
-
-
-def test_signed_fence_is_bound_to_native_operation_and_a_chain() -> None:
-    material = _material()
+def _fence(
+    material: dict[str, Any],
+    *,
+    request_key: Ed25519PrivateKey | None = None,
+    request_overrides: dict[str, object] | None = None,
+    grant_overrides: dict[str, object] | None = None,
+) -> tuple[str, str]:
     native = material["native"]
     dependency = verify_foreign_dependency(native, material["policy"])
     assert dependency is not None
@@ -249,8 +235,9 @@ def test_signed_fence_is_bound_to_native_operation_and_a_chain() -> None:
         "b_resource_binding_hash": native["resource_binding_hash"],
         "customer_id": native["customer_id"],
         "payload_hash": native["payload_hash"],
+        **(request_overrides or {}),
     }
-    request_token = _fence_token(Ed25519PrivateKey.generate(), request, grant=False)
+    request_token = _fence_token(request_key or material["outcome_key"], request, grant=False)
     grant = {
         "version": 1,
         "profile": FENCE_PROFILE,
@@ -259,64 +246,194 @@ def test_signed_fence_is_bound_to_native_operation_and_a_chain() -> None:
         "b_dispatch_hash": request["b_dispatch_hash"],
         "delegation_jtis": list(dependency.foreign_delegation_jtis),
         "revocation_epoch": 7,
-        "prepared_at": "2026-10-03T12:00:03Z",
+        "prepared_at": canonical_iso(material["base"] + timedelta(seconds=2)),
         "trust_root_id": "a-status-root",
+        **(grant_overrides or {}),
     }
-    evidence = {
-        **material["evidence"],
-        "fence_request": request_token,
-        "fence_grant": _fence_token(material["status_key"], grant, grant=True),
-    }
-    verify_foreign_revocation_evidence(
-        evidence,
-        native_dispatch_claims=native,
-        policy=material["policy"],
-        terminal_recorded_at="2026-10-03T12:00:05Z",
-    )
-    changed_native = dict(native, operation_id="other-operation")
-    with pytest.raises(ValueError, match="request differs"):
-        verify_foreign_revocation_evidence(
-            evidence,
-            native_dispatch_claims=changed_native,
-            policy=material["policy"],
-            terminal_recorded_at="2026-10-03T12:00:05Z",
+    return request_token, _fence_token(material["status_key"], grant, grant=True)
+
+
+def _evidence(
+    material: dict[str, Any],
+    *,
+    status_epoch: int = 7,
+    status_seconds: tuple[int, int] = (3, 4),
+    nonces: bool = True,
+    **fence: Any,
+) -> dict[str, Any]:
+    base = material["base"]
+    request_token, grant_token = _fence(material, **fence)
+    statuses = [
+        _status(
+            material["status_key"],
+            jti=jti,
+            at=base + timedelta(seconds=seconds),
+            epoch=status_epoch,
+            request_nonce=f"{index + 1:064x}" if nonces else None,
         )
+        for index, (jti, seconds) in enumerate(
+            zip(("a-leaf", "a-parent"), status_seconds, strict=True)
+        )
+    ]
+    dispatch = material["native"]["foreign_dependency"]["dispatch"]
+    return {
+        "foreign_dispatch_hash": hashlib.sha256(dispatch.encode()).hexdigest(),
+        "policy_hash": hash_object(material["policy"]),
+        "statuses": statuses,
+        "checked_at": canonical_iso(base + timedelta(seconds=5)),
+        "fence_request": request_token,
+        "fence_grant": grant_token,
+    }
+
+
+def _verify(
+    material: dict[str, Any],
+    evidence: Any = None,
+    *,
+    recorded: str = _RECORDED,
+    native: dict[str, Any] | None = None,
+    public_key: str | None = None,
+) -> Any:
+    return verify_foreign_revocation_evidence(
+        material["evidence"] if evidence is None else evidence,
+        native_dispatch_claims=material["native"] if native is None else native,
+        policy=material["policy"],
+        terminal_recorded_at=recorded,
+        fence_request_public_key=public_key or material["outcome_public_key"],
+    )
+
+
+def test_signed_foreign_dependency_and_clearance_verify() -> None:
+    material = _material()
+    dependency = verify_foreign_dependency(material["native"], material["policy"])
+
+    assert dependency is not None
+    assert dependency.point_id == _POINT_ID
+    assert dependency.foreign_delegation_jtis == ("a-leaf", "a-parent")
+    assert dependency.foreign_revocation_epoch == 5
+    verified = _verify(material)
+    assert verified is not None
+    assert verified.evidence_form == FOREIGN_EVIDENCE_FORM == "fenced_v2"
+    assert verified.dispatch_hash == dependency.dispatch_hash
+    assert verified.dispatch == dependency.raw_dispatch
+
+
+def test_ordinary_dispatch_has_no_verified_foreign_revocation() -> None:
+    material = _material()
+    ordinary = {
+        name: value for name, value in material["native"].items() if name != "foreign_dependency"
+    }
+    ordinary["delegation_jtis"] = ["ordinary-leaf"]
+
+    with pytest.raises(ValueError, match="ordinary dispatch must not carry"):
+        _verify(material, native=ordinary)
+    assert (
+        verify_foreign_revocation_evidence(
+            None,
+            native_dispatch_claims=ordinary,
+            policy=material["policy"],
+            terminal_recorded_at=_RECORDED,
+            fence_request_public_key=material["outcome_public_key"],
+        )
+        is None
+    )
+
+
+def test_signed_fence_is_bound_to_native_operation_and_a_chain() -> None:
+    material = _material()
+    _verify(material)
+    changed_native = dict(material["native"], operation_id="other-operation")
+    with pytest.raises(ValueError, match="request differs"):
+        _verify(material, native=changed_native)
+
+
+def test_evidence_without_the_fence_request_and_grant_is_refused() -> None:
+    material = _material()
+    fence_free = {
+        name: value
+        for name, value in material["evidence"].items()
+        if name not in {"fence_request", "fence_grant"}
+    }
+    with pytest.raises(ValueError, match="lacks the fence request and grant"):
+        _verify(material, fence_free)
+    one_field = {
+        name: value for name, value in material["evidence"].items() if name != "fence_grant"
+    }
+    with pytest.raises(ValueError, match="fields are invalid"):
+        _verify(material, one_field)
+    _verify(material)
+
+
+def test_version_one_statuses_without_a_request_nonce_are_refused() -> None:
+    material = _material()
+    unbound = _evidence(material, nonces=False)
+    with pytest.raises(ValueError, match="lacks a request nonce"):
+        _verify(material, unbound)
+    _verify(material, _evidence(material, nonces=True))
 
 
 def test_request_bound_foreign_status_verifies_and_nonce_substitution_fails() -> None:
     material = _material()
     statuses = material["evidence"]["statuses"]
-    for index, jti in enumerate(("a-leaf", "a-parent")):
-        statuses[index] = _status(
-            material["status_key"],
-            jti=jti,
-            at=material["base"] + timedelta(seconds=index + 2),
-            request_nonce=f"{index + 1:064x}",
-        )
-    verify_foreign_revocation_evidence(
-        material["evidence"],
-        native_dispatch_claims=material["native"],
-        policy=material["policy"],
-        terminal_recorded_at="2026-10-03T12:00:05Z",
-    )
+    assert [status["request_nonce"] for status in statuses] == [f"{1:064x}", f"{2:064x}"]
+    _verify(material)
 
     statuses[0]["request_nonce"] = "f" * 64
     with pytest.raises(ValueError, match="attestation does not verify"):
-        verify_foreign_revocation_evidence(
-            material["evidence"],
-            native_dispatch_claims=material["native"],
-            policy=material["policy"],
-            terminal_recorded_at="2026-10-03T12:00:05Z",
-        )
+        _verify(material)
 
     statuses[0]["request_nonce"] = None
     with pytest.raises(ValueError, match="malformed"):
-        verify_foreign_revocation_evidence(
-            material["evidence"],
-            native_dispatch_claims=material["native"],
-            policy=material["policy"],
-            terminal_recorded_at="2026-10-03T12:00:05Z",
-        )
+        _verify(material)
+
+
+def test_fence_request_must_carry_b_signature_under_the_admitted_key() -> None:
+    material = _material()
+    forged = _evidence(material, request_key=Ed25519PrivateKey.generate())
+    with pytest.raises(ValueError, match="fence token does not verify"):
+        _verify(material, forged)
+    other_key = Ed25519PrivateKey.generate().public_key().public_bytes_raw().hex()
+    with pytest.raises(ValueError, match="fence token does not verify"):
+        _verify(material, public_key=other_key)
+    _verify(material, public_key=material["outcome_public_key"])
+
+
+def test_status_read_before_the_fence_grant_is_refused() -> None:
+    material = _material()
+    early = _evidence(material, status_seconds=(1, 4))
+    with pytest.raises(ValueError, match="read before the fence grant"):
+        _verify(material, early)
+    on_grant = _evidence(material, status_seconds=(2, 2))
+    _verify(material, on_grant)
+
+
+def test_status_epoch_below_the_fence_grant_epoch_is_refused() -> None:
+    material = _material()
+    below = _evidence(material, status_epoch=6, grant_overrides={"revocation_epoch": 7})
+    with pytest.raises(ValueError, match="epoch is below the fence grant"):
+        _verify(material, below)
+    _verify(material, _evidence(material, status_epoch=7, grant_overrides={"revocation_epoch": 7}))
+    _verify(material, _evidence(material, status_epoch=8, grant_overrides={"revocation_epoch": 7}))
+
+
+def test_fence_grant_prepared_before_the_a_dispatch_is_refused() -> None:
+    material = _material()
+    early = _evidence(material, grant_overrides={"prepared_at": "2020-01-01T00:00:00Z"})
+    with pytest.raises(ValueError, match="prepared before the A dispatch"):
+        _verify(material, early)
+    at_dispatch = _evidence(
+        material, grant_overrides={"prepared_at": canonical_iso(material["base"])}
+    )
+    _verify(material, at_dispatch)
+
+
+def test_terminal_recorded_beyond_the_freshness_bound_is_refused() -> None:
+    material = _material()
+    with pytest.raises(ValueError, match="outside the foreign revocation freshness bound"):
+        _verify(material, recorded="2026-10-03T12:00:14Z")
+    with pytest.raises(ValueError, match="outside the foreign revocation freshness bound"):
+        _verify(material, recorded="2026-10-03T12:03:59Z")
+    _verify(material, recorded="2026-10-03T12:00:13Z")
 
 
 def test_policy_age_bound_clears_when_a_and_b_omit_optional_bounds() -> None:
@@ -334,8 +451,9 @@ def test_policy_age_bound_clears_when_a_and_b_omit_optional_bounds() -> None:
         "dispatch": raw_dispatch,
         "policy_hash": hash_object(material["policy"]),
     }
+    material["native"] = native
     evidence = {
-        **material["evidence"],
+        **_evidence(material),
         "foreign_dispatch_hash": hashlib.sha256(raw_dispatch.encode()).hexdigest(),
     }
 
@@ -343,12 +461,7 @@ def test_policy_age_bound_clears_when_a_and_b_omit_optional_bounds() -> None:
 
     assert dependency is not None
     assert dependency.effective_max_revocation_age_ms == 20_000
-    verify_foreign_revocation_evidence(
-        evidence,
-        native_dispatch_claims=native,
-        policy=material["policy"],
-        terminal_recorded_at="2026-10-03T12:00:05Z",
-    )
+    _verify(material, evidence)
 
 
 def test_foreign_dependency_requires_the_signed_a_revocation_identity() -> None:
@@ -375,15 +488,11 @@ def test_mixed_a_status_epochs_are_unavailable_even_when_they_increase() -> None
         jti="a-parent",
         at=material["base"] + timedelta(seconds=3),
         epoch=8,
+        request_nonce=f"{2:064x}",
     )
 
     with pytest.raises(ValueError, match="epochs differ"):
-        verify_foreign_revocation_evidence(
-            material["evidence"],
-            native_dispatch_claims=material["native"],
-            policy=material["policy"],
-            terminal_recorded_at="2026-10-03T12:00:05Z",
-        )
+        _verify(material, recorded="2026-10-03T12:00:05Z")
 
 
 def test_only_a_verified_fresh_revocation_has_the_revoked_signal() -> None:
@@ -393,15 +502,11 @@ def test_only_a_verified_fresh_revocation_has_the_revoked_signal() -> None:
         jti="a-parent",
         at=material["base"] + timedelta(seconds=3),
         revoked=True,
+        request_nonce=f"{2:064x}",
     )
 
     with pytest.raises(ForeignRevocationRevokedError):
-        verify_foreign_revocation_evidence(
-            material["evidence"],
-            native_dispatch_claims=material["native"],
-            policy=material["policy"],
-            terminal_recorded_at="2026-10-03T12:00:05Z",
-        )
+        _verify(material, recorded="2026-10-03T12:00:05Z")
 
 
 @pytest.mark.parametrize("mutation", ["stale", "wrong-root", "wrong-jti", "epoch", "malformed"])
@@ -429,12 +534,7 @@ def test_untrusted_or_incomplete_statuses_fail_closed_as_unavailable(mutation: s
         material["evidence"]["statuses"] = statuses[:1]
 
     with pytest.raises(ValueError, match="foreign revocation"):
-        verify_foreign_revocation_evidence(
-            material["evidence"],
-            native_dispatch_claims=material["native"],
-            policy=material["policy"],
-            terminal_recorded_at="2026-10-03T12:00:05Z",
-        )
+        _verify(material, recorded="2026-10-03T12:00:05Z")
 
 
 def test_missing_dependency_and_nonexact_foreign_vector_refuse_but_shared_parent_is_ordinary() -> (
@@ -488,32 +588,17 @@ def test_policy_tamper_and_gate_time_boundaries_refuse() -> None:
 
     material["evidence"]["checked_at"] = "2026-10-03T12:04:00Z"
     with pytest.raises(ValueError, match="strict dispatch validity"):
-        verify_foreign_revocation_evidence(
-            material["evidence"],
-            native_dispatch_claims=material["native"],
-            policy=material["policy"],
-            terminal_recorded_at="2026-10-03T12:04:00Z",
-        )
+        _verify(material, recorded="2026-10-03T12:04:00Z")
 
 
 def test_gate_time_after_terminal_refuses_even_with_valid_signed_statuses() -> None:
     material = _material()
     with pytest.raises(ValueError, match="recorded before"):
-        verify_foreign_revocation_evidence(
-            material["evidence"],
-            native_dispatch_claims=material["native"],
-            policy=material["policy"],
-            terminal_recorded_at="2026-10-03T12:00:03Z",
-        )
+        _verify(material, recorded="2026-10-03T12:00:03Z")
 
 
 def test_terminal_at_dispatch_expiry_refuses_after_a_valid_gate() -> None:
     material = _material()
 
     with pytest.raises(ValueError, match="recorded outside strict dispatch validity"):
-        verify_foreign_revocation_evidence(
-            material["evidence"],
-            native_dispatch_claims=material["native"],
-            policy=material["policy"],
-            terminal_recorded_at="2026-10-03T12:04:00Z",
-        )
+        _verify(material, recorded="2026-10-03T12:04:00Z")

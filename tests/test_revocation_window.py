@@ -147,6 +147,45 @@ def test_freshness_evaluated_beyond_the_bound_cannot_widen_the_window() -> None:
     assert "does not cover" in result
 
 
+def test_early_freshness_instant_cannot_widen_the_window_to_twice_the_bound() -> None:
+    """A status older than the bound at the sealed instant stays refused.
+
+    The retained freshness instant may sit a little before the sealed instant.
+    It must not let a status that is older than the bound at the sealed instant
+    pass because the status is young at the earlier retained instant.
+    """
+    status, jti, roots = _lifecycle_status()
+    checked_at = _moment(status["checked_at"])
+    bound_ms = 60000
+    at = checked_at + timedelta(milliseconds=bound_ms + 1000)
+    status["freshness_evaluated_at"] = (
+        (checked_at + timedelta(milliseconds=bound_ms - 1000)).isoformat().replace("+00:00", "Z")
+    )
+
+    refused = _verify_revocation_status(
+        status,
+        jti=jti,
+        roots=roots,
+        at=at,
+        admission_age_limit_ms=bound_ms,
+        grant_age_limit_ms=None,
+        epoch_floor=0,
+    )
+    accepted = _verify_revocation_status(
+        status,
+        jti=jti,
+        roots=roots,
+        at=checked_at + timedelta(milliseconds=bound_ms - 500),
+        admission_age_limit_ms=bound_ms,
+        grant_age_limit_ms=None,
+        epoch_floor=0,
+    )
+
+    assert refused is not None
+    assert "not fresh at the sealed decision instant" in refused
+    assert accepted is None
+
+
 def test_status_without_freshness_evaluated_at_still_uses_the_sealed_instant() -> None:
     """Absent the retained freshness instant, the check falls back to ``at`` unchanged."""
     status, jti, roots = _lifecycle_status()

@@ -27,6 +27,7 @@ from .counterparty_recovery import (
 )
 from .credential_registration import verify_enforcement_point_registration
 from .foreign_revocation import (
+    VerifiedForeignRevocation,
     project_foreign_revocation_policy,
     verify_foreign_dependency,
     verify_foreign_revocation_evidence,
@@ -92,6 +93,8 @@ class ExecutionBundleVerification:
     valid: bool
     checks: Mapping[str, str]
     errors: tuple[str, ...] = ()
+    foreign_dispatch_hash: str | None = None
+    foreign_evidence_form: str | None = None
 
 
 def _digest(value: object) -> bool:
@@ -1586,7 +1589,7 @@ def _verify_foreign_execution(
     decision: Mapping[str, Any],
     native_dispatch_claims: Mapping[str, Any],
     outcome: Mapping[str, Any],
-) -> None:
+) -> VerifiedForeignRevocation | None:
     """Verify the mandatory or supplied final A clearance for a native B terminal."""
     foreign = _foreign_policy_and_dependency(
         admission=admission,
@@ -1597,19 +1600,26 @@ def _verify_foreign_execution(
     if foreign is None:
         if clearance is not None:
             raise ValueError("ordinary native terminal must not carry foreign revocation evidence")
-        return
+        return None
     policy, dependency = foreign
     if dependency is None:
         if clearance is not None:
             raise ValueError("native terminal without a foreign dependency carries clearance")
-        return
+        return None
     if outcome.get("status") == "committed" or clearance is not None:
-        verify_foreign_revocation_evidence(
+        claims = getattr(admission, "claims", None)
+        binding = claims.get("resource_binding") if isinstance(claims, Mapping) else None
+        outcome_key = binding.get("outcome_public_key") if isinstance(binding, Mapping) else None
+        if not isinstance(outcome_key, (str, bytes)):
+            raise ValueError("foreign clearance lacks the admitted B outcome key")
+        return verify_foreign_revocation_evidence(
             clearance,
             native_dispatch_claims=native_dispatch_claims,
             policy=policy,
             terminal_recorded_at=outcome["recorded_at"],
+            fence_request_public_key=outcome_key,
         )
+    return None
 
 
 def verify_execution_bundle(
@@ -1641,6 +1651,7 @@ def verify_execution_bundle(
     )
     checks: dict[str, str] = dict.fromkeys(check_names, "not_established")
     effect_check = "record_effect"
+    foreign_result: VerifiedForeignRevocation | None = None
 
     def failed(name: str, error: Exception | str) -> ExecutionBundleVerification:
         checks[name] = "failed"
@@ -1858,7 +1869,7 @@ def verify_execution_bundle(
             for name in _resource_join_fields(claims.get("profile"))
         ):
             raise ValueError("resource outcome does not join the signed dispatch")
-        _verify_foreign_execution(
+        foreign_result = _verify_foreign_execution(
             admission=admission,
             decision=decision,
             native_dispatch_claims=claims,
@@ -1884,7 +1895,12 @@ def verify_execution_bundle(
     elif outcome.get("status") != "not_executed":
         return failed(effect_check, "released resource receipt is not a not-executed tombstone")
 
-    return ExecutionBundleVerification(all(state == "valid" for state in checks.values()), checks)
+    return ExecutionBundleVerification(
+        all(state == "valid" for state in checks.values()),
+        checks,
+        foreign_dispatch_hash=foreign_result.dispatch_hash if foreign_result else None,
+        foreign_evidence_form=foreign_result.evidence_form if foreign_result else None,
+    )
 
 
 __all__ = ["ExecutionBundleVerification", "verify_execution_bundle"]

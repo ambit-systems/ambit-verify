@@ -6,8 +6,37 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Require fenced version 2 foreign revocation evidence. A terminal's
+  `foreign_revocation_evidence` must now carry `fence_request` and
+  `fence_grant`, and every A status must carry a `request_nonce`. Evidence
+  without the fence fields and version 1 statuses are refused. Verification
+  now also refuses a status read before the fence grant `prepared_at`, a
+  status epoch below the grant epoch, a grant `prepared_at` before the A
+  dispatch `authorized_at`, and a B terminal `recorded_at` more than the
+  freshness bound after a status `checked_at`.
+- `verify_foreign_revocation_evidence` takes the required keyword argument
+  `fence_request_public_key` and verifies B's signature on the fence request.
+  `verify_execution_bundle` passes the admitted B `outcome_public_key`. The
+  function returns `VerifiedForeignRevocation` with the A dispatch, its hash
+  and the evidence form `fenced_v2`, or `None` for an ordinary dispatch.
+- `ExecutionBundleVerification` carries `foreign_dispatch_hash` and
+  `foreign_evidence_form`. Both default to `None`. The `execution` command
+  prints them when a foreign clearance verified.
+- Refuse a revocation status when its unsigned `freshness_evaluated_at` is
+  before the decision time and the status is older than the freshness bound at
+  the decision time. This closes the double freshness window.
+
 ### Added
 
+- `verify_paired_execution_bundles` verifies an A bundle and a B bundle with
+  `verify_execution_bundle`. It requires the `dispatch_token` of A's
+  `dispatch_fenced` record to equal the A dispatch in B's
+  `dispatch_claims.foreign_dependency`. It returns the frozen
+  `PairedBundleVerification` with per-side errors, the pairing flag and the
+  verified A dispatch. `ExecutionBundleTrust` holds the caller-pinned inputs of
+  each side.
 - `OriginVerification` carries `codes`, a tuple of stable failure codes.
   Every invalid result of `verify_admitted_path` and `verify_admitted_origin`
   names exactly one code from `ADMITTED_PATH_FAILURE_CODES`:
@@ -25,15 +54,13 @@ follows [Semantic Versioning](https://semver.org/).
   `fence_request_hash`, `fence_message` (domain-separated signing input),
   `verify_fence_token`, and `unverified_fence_claims`.
 - Verify foreign customer-delete fence evidence. A terminal's
-  `foreign_revocation_evidence` is either `{foreign_dispatch_hash, policy_hash,
-  statuses, checked_at}` or those fields plus `{fence_request, fence_grant}`.
-  When both fence fields are present, verification checks the grant signature
-  under a trust root of A's pinned point policy. It also checks that the request
-  names the native B operation and the raw A dispatch, that the grant joins the
-  request hash, the A dispatch hash and the A delegation chain, that the grant
-  epoch is not below the A dispatch epoch, and that the grant was prepared
-  before the B gate time. The verifier does not check B's signature on the
-  fence request offline.
+  `foreign_revocation_evidence` is `{foreign_dispatch_hash, policy_hash,
+  statuses, checked_at, fence_request, fence_grant}`. Verification checks the
+  grant signature under a trust root of A's pinned point policy. It also checks
+  that the request names the native B operation and the raw A dispatch, that
+  the grant joins the request hash, the A dispatch hash and the A delegation
+  chain, that the grant epoch is not below the A dispatch epoch, and that the
+  grant was prepared before the B gate time.
 - Verify request-bound revocation status under a distinct version 2 signing
   context. Retained version 1 status evidence keeps its original signature
   rules. Foreign clearance replay accepts the signed version 2 artefact.

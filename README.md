@@ -258,21 +258,34 @@ consent, `foreign_dependency` is a closed signed object with the exact raw A
 dispatch and the B policy hash; raw A dispatches cannot nest another foreign
 dependency. A committed foreign B terminal carries the closed signed
 `foreign_revocation_evidence` object
-`{foreign_dispatch_hash, policy_hash, statuses, checked_at}`, or those fields
-plus `{fence_request, fence_grant}`. Each status is a version 1 status or a
-version 2 status that carries a request nonce. Public replay
+`{foreign_dispatch_hash, policy_hash, statuses, checked_at, fence_request,
+fence_grant}`. Every status is a version 2 status that carries a request
+nonce. Public replay
 rederives the signed B policy, joins the raw A bytes and hash to the native B
 dispatch and retained A artifact, and validates every A status at the one gate
 time under A's independent roots and epoch floor. A signed `not_executed`
 foreign terminal may omit clearance; any clearance it does carry is verified
 with the same strict rules.
 
-A valid result shows fence ordering only when both fence fields are present.
-It shows request binding only when the statuses carry a nonce. Offline replay
-does not check B's signature on the fence request.
+Replay refuses evidence that lacks the fence fields and refuses version 1
+statuses. It verifies B's signature on the fence request under B's admitted
+outcome public key. It requires each A status to be read at or after the fence
+grant `prepared_at`, with an epoch at or above the grant epoch. It requires
+the grant `prepared_at` to be at or after the A dispatch `authorized_at`. It
+requires the B terminal `recorded_at` to be within the status freshness bound
+of each A status `checked_at`. The request nonce is a fresh B challenge for
+each status read. The fence request and grant do not carry it, so replay does
+not bind the nonce to the fence. A valid committed result shows the verified A
+dispatch hash and the evidence form `fenced_v2`.
+
+`verify_paired_execution_bundles` verifies an A bundle and a B bundle, each
+under its own caller-pinned `ExecutionBundleTrust`. It requires the
+`dispatch_token` of A's `dispatch_fenced` record to equal the A dispatch in B's
+`dispatch_claims.foreign_dependency`. The result names the verified A dispatch
+and its hash when the pair is valid.
 
 This proves the authenticated final A read precedes the recorded B terminal.
-With fence evidence, it also proves A granted the fence before B's gate time.
+It also proves A granted the fence before B's gate time.
 It does not prove distributed atomicity. When every A revocation writer uses
 the fenced store and every B delete uses B's door, an A revocation that commits
 before A grants the fence makes prepare refuse, and a revocation attempted
