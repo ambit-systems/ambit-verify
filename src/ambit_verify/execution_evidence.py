@@ -763,7 +763,9 @@ def _replay_prefix(
     expected_ledger_id: str,
     enforcement_point_id: str,
     enforcement_point_public_key: str,
-) -> None:
+    allow_unconsumed_dry_runs: bool = False,
+    strict_lifecycle: bool = False,
+) -> dict[str, Any]:
     """Replay every current operation's retained accounting/transition evidence."""
     decisions: dict[str, Mapping[str, Any]] = {}
     operation_states: dict[str, str] = {}
@@ -803,7 +805,10 @@ def _replay_prefix(
             roots = _adapter_roots(record, admission_trust_roots_by_adapter)
             consumption = record.get("consumption")
             if consumption is None:
-                if record.get("decision") == "ALLOW" or any(
+                if (
+                    record.get("decision") == "ALLOW"
+                    and not (allow_unconsumed_dry_runs and record.get("dry_run") is True)
+                ) or any(
                     intent.get("decision_seq") == record.get("seq") for intent in intents.values()
                 ):
                     raise ValueError(
@@ -1461,6 +1466,13 @@ def _replay_prefix(
                     for name in _resource_join_fields(dispatch_claims.get("profile"))
                 ):
                     raise ValueError("terminal receipt does not join its fenced dispatch")
+                if strict_lifecycle:
+                    _verify_foreign_execution(
+                        admission=admission,
+                        decision=decision,
+                        native_dispatch_claims=dispatch_claims,
+                        outcome=outcome,
+                    )
                 claims, egress_records = _action_and_payload(decision, fence)
                 accepted_at = outcome.get("accepted_at")
                 if accepted_at is not None and not (
@@ -1518,6 +1530,15 @@ def _replay_prefix(
                     key, amount, owner, _ = reservations[reservation]
                     reservations[reservation] = (key, amount, owner, "committed")
                 operation_states[operation_id] = "committed"
+
+    return {
+        "operation_states": operation_states,
+        "reservations": reservations,
+        "operation_reservations": operation_reservations,
+        "charged": charged,
+        "consumed": consumed,
+        "decisions": decisions,
+    }
 
 
 def _require_admitted_schema5_consent(

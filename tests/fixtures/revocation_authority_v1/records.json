@@ -1,0 +1,80 @@
+[
+  {
+    "record_type": "revocation",
+    "phase": "intent",
+    "revocation_id": "revocation:target-grant:revoker-leaf",
+    "revocation_request_hash": "a6f701407cda52d4d83d1cb967454a22b6f986d27555dddba0588d2c2630d62c",
+    "target_jti": "target-grant",
+    "target_content_hash": "15c3634fecac5c745ce52346877b0f721c19dd4d7bc674966f50372934886574",
+    "revoker_jti": "revoker-leaf",
+    "revoker_trust_root_id": "revoker-root",
+    "requested_at": "2026-11-17T08:01:29.933Z",
+    "authorised_at": "2026-11-17T08:01:29.933Z",
+    "recorded_at": "2026-11-17T08:01:29.943Z",
+    "retained": {
+      "request": "eyJleHAiOiIyMDI2LTExLTE3VDA5OjAxOjI5LjkzM1oiLCJqdGkiOiJ0YXJnZXQtZ3JhbnQiLCJuYmYiOiIyMDI2LTExLTE3VDA4OjAxOjI5LjkzM1oiLCJyZXF1ZXN0ZWRfYXQiOiIyMDI2LTExLTE3VDA4OjAxOjI5LjkzM1oiLCJyZXZvY2F0aW9uX2lkIjoicmV2b2NhdGlvbjp0YXJnZXQtZ3JhbnQ6cmV2b2tlci1sZWFmIiwicmV2b2tlcl9qdGkiOiJyZXZva2VyLWxlYWYiLCJyZXZva2VyX3N1YiI6InJldm9rZXItcm9vdCIsInJldm9rZXJfdHJ1c3Rfcm9vdF9pZCI6InJldm9rZXItcm9vdCIsInRhcmdldF9jb250ZW50X2hhc2giOiIxNWMzNjM0ZmVjYWM1Yzc0NWNlNTIzNDY4NzdiMGY3MjFjMTlkZDRkN2JjNjc0OTY2ZjUwMzcyOTM0ODg2NTc0IiwidHJ1c3Rfcm9vdF9pZCI6InJldm9rZXItcm9vdCJ9.ed25519:ICIgm662cKg1lXFuVpq2yCsngtX11KJxGvyWthVq6zJoIozQfRHeNs0ohNgsL81DqUzPbiCCtMPIzDYAsSxjDw==",
+      "target": "eyJjaGFpbl9kZXB0aCI6MCwiZXhwIjoiMjAyNi0xMS0xN1QwOTo1MToyOS45MzM4MjcrMDA6MDAiLCJpc3MiOiIiLCJqdGkiOiJ0YXJnZXQtZ3JhbnQiLCJtYXhfZGVwdGgiOjAsIm5iZiI6IjIwMjYtMTEtMTdUMDc6NTE6MjkuOTMzODI3KzAwOjAwIiwic2NvcGVfYWN0aW9ucyI6WyJyZWFkIl0sInNjb3BlX2RvbWFpbnMiOlsiZmlsZXN5c3RlbSJdLCJzY29wZV9wYXRocyI6WyIvZGF0YS9yZXBvcnRzIl0sInN1YiI6ImFnZW50LWEiLCJ0cnVzdF9yb290X2lkIjoiZGVsZWdhdGlvbi1yb290In0.ed25519:TG6iOaW7Pqoa0f5+Dq4Aa+K1QjghDiC7TFW8Bx8csKq2p6u8y5oGvvVtOApwyS91I3c9yiug4Y6d6cAVRRvIBQ==",
+      "revoker": [
+        "eyJjaGFpbl9kZXB0aCI6MSwiZXhwIjoiMjAyNi0xMS0xN1QxMzozMToyOS45MzM4MjcrMDA6MDAiLCJpc3MiOiIiLCJqdGkiOiJyZXZva2VyLWxlYWYiLCJtYXhfZGVwdGgiOjEsIm5iZiI6IjIwMjYtMTEtMTdUMDc6MzE6MjkuOTMzODI3KzAwOjAwIiwicGFyZW50X2p0aSI6InJldm9rZXItY2hhaW4tcm9vdCIsInNjb3BlX2FjdGlvbnMiOlsicmVhZCIsIndyaXRlIiwiZGVsZWdhdGUiXSwic2NvcGVfZG9tYWlucyI6WyJmaWxlc3lzdGVtIl0sInNjb3BlX3BhdGhzIjpbIi9kYXRhIl0sInNjb3BlX3Rvb2xzIjpbXSwic3ViIjoicmV2b2tlci1yb290IiwidHJ1c3Rfcm9vdF9pZCI6ImRlbGVnYXRpb24tcm9vdCJ9.ed25519:LJuEq3E392ZnGiwSp5o+gVX1ZhlAdFLdPWtM57352U0I8qwHprjKsZZXAEJIb54B20otmszftVxYU1waOB46Dw==",
+        "eyJjaGFpbl9kZXB0aCI6MCwiZXhwIjoiMjAyNi0xMS0xN1QxNjowMToyOS45MzM4MjcrMDA6MDAiLCJpc3MiOiIiLCJqdGkiOiJyZXZva2VyLWNoYWluLXJvb3QiLCJtYXhfZGVwdGgiOjEsIm5iZiI6IjIwMjYtMTEtMTdUMDc6MDE6MjkuOTMzODI3KzAwOjAwIiwic2NvcGVfYWN0aW9ucyI6WyJyZWFkIiwid3JpdGUiLCJkZWxlZ2F0ZSJdLCJzY29wZV9kb21haW5zIjpbImZpbGVzeXN0ZW0iXSwic2NvcGVfcGF0aHMiOlsiL2RhdGEiXSwic3ViIjoicmV2b2tlci1yb290IiwidHJ1c3Rfcm9vdF9pZCI6ImRlbGVnYXRpb24tcm9vdCJ9.ed25519:jFTDxps/EzGeoky065wc3lnR3jkyoE7m/QYwHvgXKEyEas5CALiYUvewNcdzEHA5D76+GuxUVr4uIGo08fK0Bg=="
+      ],
+      "authority_evidence": {
+        "profile": "revocation-authority/1",
+        "statuses": [
+          {
+            "jti": "revoker-leaf",
+            "is_revoked": false,
+            "checked_at": "2026-11-17T08:01:29.941Z",
+            "freshness_bound_ms": 600000,
+            "source": "sqlite",
+            "verifiable": true,
+            "attestation": "ed25519:fFTH2T6RdHq3Pw6fhQT1IyZrCWkvn0qFbAJ3/bClhHfzibw04a+dHef7mBh56B4nuP9cnuuqP9JNp560k3xqBA==",
+            "trust_root_id": "revocation-root",
+            "revocation_epoch": 0,
+            "freshness_evaluated_at": "2026-11-17T08:01:29.941Z"
+          },
+          {
+            "jti": "revoker-chain-root",
+            "is_revoked": false,
+            "checked_at": "2026-11-17T08:01:29.942Z",
+            "freshness_bound_ms": 600000,
+            "freshness_evaluated_at": "2026-11-17T08:01:29.942Z",
+            "source": "sqlite",
+            "verifiable": true,
+            "attestation": "ed25519:D97egLprwabD2Jr0fQoQSnt7l96eQ+eg6l/hstq0y46ksiekf2VwlYx3o8PwN65VyHvuifk3GKZEFmWlyukXAA==",
+            "trust_root_id": "revocation-root",
+            "revocation_epoch": 0
+          }
+        ]
+      }
+    },
+    "seq": 1,
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "record_hash": "525adcec3d22eba71752b2d6e6b74e9ce9e5f75004812948b1a55a8c28cd4a3a"
+  },
+  {
+    "record_type": "revocation",
+    "phase": "outcome",
+    "revocation_request_hash": "a6f701407cda52d4d83d1cb967454a22b6f986d27555dddba0588d2c2630d62c",
+    "intent_seq": 1,
+    "result": "revoked",
+    "recorded_at": "2026-11-17T08:01:29.943Z",
+    "retained": {
+      "status": {
+        "jti": "target-grant",
+        "is_revoked": true,
+        "checked_at": "2026-11-17T08:01:29.943Z",
+        "freshness_bound_ms": 600000,
+        "source": "sqlite",
+        "verifiable": true,
+        "attestation": "ed25519:eq8tvEPRdrTcVRrkiWPOcx9e97WxAwq8RlYi0JOH3ANixPb6+T/8D5HqJMtEAFAOrfF4fCPkVh7q+EGsmqwyBQ==",
+        "trust_root_id": "revocation-root",
+        "revocation_epoch": 1
+      }
+    },
+    "status_artefact_hash": "5eeabf2cade4f7edc3da7bc82b408305ee40d681ae27578ddb9a629612eaccb7",
+    "seq": 2,
+    "prev_hash": "525adcec3d22eba71752b2d6e6b74e9ce9e5f75004812948b1a55a8c28cd4a3a",
+    "record_hash": "f41b5ba8cfba81c9775eff8b6d553fe21521cfea68e3030ffcbbfeae470a6b49"
+  }
+]

@@ -1,0 +1,251 @@
+[
+  {
+    "authentication_context": {
+      "actor_key_fingerprint": "d12fb2a6953f71ca1db2bb3853709e1afa1835b83c0dd113b64eeadeddeb4913",
+      "admission_token": "eyJjcmVkZW50aWFsX3JlZ2lzdHJhdGlvbl9wdWJsaWNfa2V5cyI6eyJvcmctZW5yb2xtZW50LTEiOiJlZTkzYTRmNjZmOGQxNmI4MTliYjliZWI5ZmZjY2RmY2RjMTQxMmU4N2ZlZTZhMzI0YzJhOTlhMWUwZTY3MTQ4In0sImNyZWRlbnRpYWxfdHJ1c3Rfcm9vdHMiOnsiZGVsZWdhdGlvbi1yb290Ijp7InB1YmxpY19rZXkiOiJkYjk5NWZlMjUxNjlkMTQxY2FiOWJiYmE5MmJhYTAxZjlmMmUxZWNlN2RmNGNiMmFjMDUxOTBmMzdmY2MxZjlkIiwic2NoZW1lIjoiZWQyNTUxOSJ9LCJpc3N1ZXItcm9vdCI6eyJwdWJsaWNfa2V5IjoiMjE1MmY4ZDE5Yjc5MWQyNDQ1MzI0MmUxNWYyZWFiNmNiN2NmZmE3YjZhNWVkMzAwOTc5NjBlMDY5ODgxZGIxMiIsInNjaGVtZSI6ImVkMjU1MTkifSwicmF0aWZpZXItcm9vdCI6eyJwdWJsaWNfa2V5IjoiMjJmYzI5Nzc5MmYwYjZmZmMwYmZjZmRiN2VkYjBjMGFhMTRlMDI1YTM2NWVjMGUzNDJlODZlMzgyOWNiNzRiNiIsInNjaGVtZSI6ImVkMjU1MTkifSwid29ya2xvYWQtYWdlbnQtMSI6eyJwdWJsaWNfa2V5IjoiMDRmNjhiMWRlMGY1Y2U2ODYxOTJmNGJkMGZkMzQxNjM4NjNmMmU4OWQzODVmOGJjZmI4NTk3OTUzM2E1N2FjOWIwNGYwMjJhYjZiMDk2YzhiZjQyODA0ZDhlNjdkMzhiM2Y4ODg2Njk4MGNjOTAzZjY4ZmRlOWQyZTE0M2Q5MzI2NyIsInJlZ2lzdHJhdGlvbiI6eyJjb21wb3NpdGlvbl9oYXNoIjoiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYiIsImNyZWRlbnRpYWxfa2luZCI6Indvcmtsb2FkIiwia2V5X2ZpbmdlcnByaW50IjoiZDEyZmIyYTY5NTNmNzFjYTFkYjJiYjM4NTM3MDllMWFmYTE4MzViODNjMGRkMTEzYjY0ZWVhZGVkZGViNDkxMyIsIm93bmVyX29mX3JlY29yZCI6IkFjbWUgUHR5IEx0ZCIsInByb29mX29mX3Bvc3Nlc3Npb24iOiJNRVVDSVFDVSs1bUdTMHhMdGx0cTdmdytKb3p5L2E3NDZCSE9rakFCTTk0QTZFRzM3d0lnWlpENTNzSGVEelhlM0FWYlUvL2cxOXV0SEd3UlRrU3lkNExDOWxibGRQRT0iLCJwcm92aXNpb25pbmdfcmVmIjoiZGVwbG95L2FjbWUvYWdlbnQvMDAwNyIsInB1YmxpY19rZXkiOiIwNGY2OGIxZGUwZjVjZTY4NjE5MmY0YmQwZmQzNDE2Mzg2M2YyZTg5ZDM4NWY4YmNmYjg1OTc5NTMzYTU3YWM5YjA0ZjAyMmFiNmIwOTZjOGJmNDI4MDRkOGU2N2QzOGIzZjg4ODY2OTgwY2M5MDNmNjhmZGU5ZDJlMTQzZDkzMjY3IiwicmVnaXN0ZXJlZF9hdCI6IjIwMjYtMDgtMDRUMDA6MDA6MDArMDA6MDAiLCJyZWdpc3RyYXRpb25fcm9vdF9pZCI6Im9yZy1lbnJvbG1lbnQtMSIsInJlZ2lzdHJhdGlvbl9zaWduYXR1cmUiOiJlZDI1NTE5OlZRb1ZOR0hNejlYM0pCMGpid1ZMUUtLc3pDV3ZPaVA4ZjIzdG1GU05FL3VhbDJRZURObXJrT1lIeGZTaVpBaGdlcmFIa0tYRzdydDBiR1J2Y0RYTkFRPT0iLCJzY2hlbWFfdmVyc2lvbiI6IjEiLCJzY2hlbWUiOiJwMjU2Iiwic3ViamVjdCI6ImFnZW50LWEiLCJ0cnVzdF9yb290X2lkIjoid29ya2xvYWQtYWdlbnQtMSJ9LCJzY2hlbWUiOiJwMjU2In19LCJjdW11bGF0aXZlX2F0dGVzdGF0aW9uX3B1YmxpY19rZXlzIjp7ImNvcmUtbGl2ZS1jdW11bGF0aXZlLXJvb3QiOiI4MTQ2NjQwZjAyNDkzYWY0ZmJjNTRmZTMzMzg4ZTc1ZGMyYzkzN2FlMGI3NzI3Y2MyYjJhZmIxYjc1MTk5YTNlIn0sImRvbWFpbl9pZCI6ImZpbGVzeXN0ZW0iLCJlbmZvcmNlbWVudF9wb2ludF9pZCI6IjZjNWVlYzgxYTFhMDJiN2MiLCJleHAiOiIyMDI2LTExLTE3VDA4OjAyOjI5LjgxNzIwMyswMDowMCIsImxlZGdlcl9pZCI6ImNvcmUtbGl2ZS10ZXN0LWxlZGdlciIsIm1heF9hY3Rvcl9wcm9vZl9hZ2Vfc2Vjb25kcyI6NjAsIm1heF9jdW11bGF0aXZlX2FnZV9tcyI6NjAwMDAsIm1heF9yZXZvY2F0aW9uX2FnZV9tcyI6NjAwMDAsIm5iZiI6IjIwMjYtMTEtMTdUMDc6NTY6MjkuODE3MjAzKzAwOjAwIiwib3JpZ2luX2dyYW50X2hhc2hlcyI6WyJiNTE4MDNiOGRmNWViODc0YzUwNmZiMjNlOTEwNWE5OWZiNDYyNDU5MWYyNWQ4YzBhNTI5YWY0ZjkxOTg4MmEzIl0sInByZXZpb3VzX2FkbWlzc2lvbl9oYXNoIjpudWxsLCJwcmluY2lwYWxfaWQiOiJhZ2VudC1hIiwicmVzb3VyY2VfYmluZGluZyI6eyJhZGFwdGVyX2lkIjoiY29yZS10ZXN0LWFkYXB0ZXIiLCJkb3duc3RyZWFtX3BhdGgiOiIvdjEvY2FsbCIsImRvd25zdHJlYW1fdXJsIjoiaHR0cHM6Ly9kb3duc3RyZWFtLmV4YW1wbGUudGVzdCIsIm91dGNvbWVfcHJvZmlsZSI6bnVsbCwib3V0Y29tZV9wdWJsaWNfa2V5IjpudWxsLCJyZWNlaXB0X3B1YmxpY19rZXkiOiJlZjc0N2ZmZjliNDcyNmM3YTRlNTM1MDQ2NDQxODFkNGE3MDBlZmQ2ZjIyOTQ0NDAzOGY0N2UxNDNmYjhjNTlhIn0sInJlc291cmNlX2lkIjoiY29yZS10ZXN0LXJlc291cmNlIiwicmV2b2NhdGlvbl9hdHRlc3RhdGlvbl9wdWJsaWNfa2V5cyI6eyJyZXZvY2F0aW9uLXJvb3QiOiJkNzU5NzkzYmJjMTNhMjgxOWE4MjdjNzZhZGI2ZmJhOGE0OWFlZTAwN2Y0OWYyZDA5OTJkOTliODI1YWQyYzQ4In0sInNjaGVtYV92ZXJzaW9uIjoyLCJ0cnVzdF9yb290X2lkIjoiYWRtaXNzaW9uLXJvb3QiLCJ2ZXJzaW9uIjoxfQ.ed25519:2Dy3aqxpl1pALF8J6pL9Cvm0dO0x7plgZAlhmZFSw3Xzk9dpvRFye6+EhWG86dkhfF8pdAIR3xMYdETbu6RdCw==",
+      "domain_id": "filesystem",
+      "enforcement_point_id": "6c5eec81a1a02b7c",
+      "ledger_id": "core-live-test-ledger",
+      "request_hash": "a295a2db5c26439beafccb90c0a35be81c2ddcd6334f81d944adf9dfd56e29b6"
+    },
+    "authentication_kind": "delegation_issuance",
+    "consumed_identifiers": [
+      {
+        "expires_at": "2026-11-17T07:58:29.834112+00:00",
+        "identifier": "{\"key_fingerprint\":\"d12fb2a6953f71ca1db2bb3853709e1afa1835b83c0dd113b64eeadeddeb4913\",\"ledger_id\":\"core-live-test-ledger\",\"nonce\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+        "namespace": "actor_nonce"
+      }
+    ],
+    "evaluated_at": "2026-11-17T07:57:29.838556+00:00",
+    "event": "authentication",
+    "operation": null,
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "profile": "canonical-operation/1",
+    "proof": {
+      "audience": "core-live-test-ledger",
+      "issued_at": "2026-11-17T07:57:29.834112+00:00",
+      "key_fingerprint": "d12fb2a6953f71ca1db2bb3853709e1afa1835b83c0dd113b64eeadeddeb4913",
+      "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "scheme": "p256",
+      "signature": "p256:8oUKoo970ZEY+JYKeE/JB8NrKTs30NRUZXOUZkPqQ8JxDG3Ueg8f2lOfMH6nWSkdZUxu56UXd8DLzHQUkmvTcA=="
+    },
+    "record_hash": "ee2ec8e6a39bcc355bb78587357b1250ce948e26b702f9f6f06ae1b2d7e66457",
+    "record_type": "consumption",
+    "request": {
+      "actor": {
+        "id": "agent-a"
+      },
+      "claims": {
+        "aud": [
+          "6c5eec81a1a02b7c"
+        ],
+        "bounds": [
+          {
+            "amount_scaled": "1",
+            "applies_to": {
+              "actions": [
+                "read"
+              ]
+            },
+            "kind": "commitment_amount",
+            "unit": "AUD"
+          }
+        ],
+        "expires_at": "2026-11-17T07:58:29.834112+00:00",
+        "jti": "admitted-child",
+        "max_depth": 1,
+        "scope_actions": [
+          "read"
+        ],
+        "scope_domains": [
+          "filesystem"
+        ],
+        "scope_paths": [
+          "/Users/artharol/Workspace/ambit-systems/work/authority-calculus-prototype/audit/completion-20261117T071201Z/replay/issuance-fixture-03/runtime"
+        ],
+        "subject": "agent-a"
+      },
+      "parents": [
+        "eyJhdWQiOlsiNmM1ZWVjODFhMWEwMmI3YyJdLCJhdXRob3JpdHlfZW50cnlfaGFzaCI6ImM2ZDU0ZDU3YTJiZTc1ZWU5MWZkZjlkMTRiMDI3ZmY1ZTMwODUyNzQ4ZjU0YzY5MjgzM2UxMWEwMTA0NGUzYTciLCJib3VuZHMiOlt7ImFtb3VudF9zY2FsZWQiOiI1MDAwIiwiYXBwbGllc190byI6eyJhY3Rpb25zIjpbInJlYWQiXX0sImtpbmQiOiJjb21taXRtZW50X2Ftb3VudCIsInVuaXQiOiJBVUQifV0sImNoYWluX2RlcHRoIjowLCJleHAiOiIyMDI2LTExLTE3VDExOjU3OjI5LjgxN1oiLCJpc3MiOiJBY21lIFB0eSBMdGQiLCJqdGkiOiJlbnRyeTphY21lLXJlcG9ydGluZy0wMTpyMTphMSIsIm1heF9kZXB0aCI6MSwibmJmIjoiMjAyNi0xMS0xN1QwNzo1MjoyOS44MTdaIiwicGFyZW50X2p0aSI6bnVsbCwicmF0aWZpY2F0aW9uX2hhc2giOiIwZjE4YTNkZDM4YmJlNmE5NGJkMzEzZTg4ZWQ0ZDY5ZGMyNzMyMTJjYjA5M2Q4ZjNjYzY1NGFhYWM2ZDlhNjgyIiwic2NvcGVfYWN0aW9ucyI6WyJyZWFkIiwiZGVsZWdhdGUiXSwic2NvcGVfZG9tYWlucyI6WyJmaWxlc3lzdGVtIl0sInNjb3BlX3BhdGhzIjpbIi9Vc2Vycy9hcnRoYXJvbC9Xb3Jrc3BhY2UvYW1iaXQtc3lzdGVtcy93b3JrL2F1dGhvcml0eS1jYWxjdWx1cy1wcm90b3R5cGUvYXVkaXQvY29tcGxldGlvbi0yMDI2MTExN1QwNzEyMDFaL3JlcGxheS9pc3N1YW5jZS1maXh0dXJlLTAzL3J1bnRpbWUiXSwic2NvcGVfdG9vbHMiOltdLCJzdWIiOiJhZ2VudC1hIiwidHJ1c3Rfcm9vdF9pZCI6Imlzc3Vlci1yb290In0.ed25519:OiDJghmi+e/ZrkiX2HNVmHMYg/FvNqFAsrld7SzrhH0cAd3nLwk2uPQCpthLTYjRIDTFCffbTVNN8OE+cLoPDA=="
+      ],
+      "version": "1"
+    },
+    "seq": 1,
+    "timestamp_utc": "2026-11-17T07:57:29.844Z"
+  },
+  {
+    "allocation": [
+      {
+        "amount_scaled": "1",
+        "kind": "commitment_amount",
+        "limit_type": "per_grant",
+        "unit": "AUD"
+      }
+    ],
+    "change_record_hash": null,
+    "child_jtis": null,
+    "content_hash": "fef071816552b6793af0d3b05bf710a86d6dbc000d2bf4cacb8fa3575bf5ad02",
+    "entry_id": null,
+    "event": "reserved",
+    "grant": {
+      "ancestry_content_hash": "c1d26a712ab01164b9ee3ebab0f9f32418d56283da6ef5d83e2ad7fd12778971",
+      "authority_entry_hash": "c6d54d57a2be75ee91fdf9d14b027ff5e30852748f54c692833e11a01044e3a7",
+      "chain_depth": 1,
+      "issued_at": "2026-11-17T07:57:29.838556+00:00",
+      "parent_ancestry_hash": "dc7d47b3d99f4ef0b7c0e65a979fb348554f36b02e71f138ebe75cd7f0f98eba",
+      "parent_content_hash": "8e726ef38afbb2efa7bfffa602d3249144355a636b625a373817fb78fc171257",
+      "ratification_hash": "0f18a3dd38bbe6a94bd313e88ed4d69dc273212cb093d8f3cc654aaac6d9a682",
+      "sub": "agent-a"
+    },
+    "grant_jti": null,
+    "jti": "admitted-child",
+    "kind": null,
+    "limit_type": null,
+    "parent_jti": "entry:acme-reporting-01:r1:a1",
+    "prev_hash": "ee2ec8e6a39bcc355bb78587357b1250ce948e26b702f9f6f06ae1b2d7e66457",
+    "record_hash": "e53f92898cab3b2de32211a1b689418b3c143c06a1e0d7fa82d5287e448d72c8",
+    "record_type": "issuance_event",
+    "recorded_at": "2026-11-17T07:57:29.846586+00:00",
+    "revision": null,
+    "seq": 2,
+    "timestamp_utc": "2026-11-17T07:57:29.846Z",
+    "unit": null,
+    "verification_evidence": {
+      "authentication_hash": "ee2ec8e6a39bcc355bb78587357b1250ce948e26b702f9f6f06ae1b2d7e66457",
+      "child_claims": {
+        "aud": [
+          "6c5eec81a1a02b7c"
+        ],
+        "authority_entry_hash": "c6d54d57a2be75ee91fdf9d14b027ff5e30852748f54c692833e11a01044e3a7",
+        "bounds": [
+          {
+            "amount_scaled": "1",
+            "applies_to": {
+              "actions": [
+                "read"
+              ]
+            },
+            "kind": "commitment_amount",
+            "unit": "AUD"
+          }
+        ],
+        "chain_depth": 1,
+        "exp": "2026-11-17T07:58:29.834112+00:00",
+        "iss": "Acme Pty Ltd",
+        "jti": "admitted-child",
+        "max_depth": 1,
+        "nbf": "2026-11-17T07:57:29.838556+00:00",
+        "parent_jti": "entry:acme-reporting-01:r1:a1",
+        "ratification_hash": "0f18a3dd38bbe6a94bd313e88ed4d69dc273212cb093d8f3cc654aaac6d9a682",
+        "scope_actions": [
+          "read"
+        ],
+        "scope_domains": [
+          "filesystem"
+        ],
+        "scope_paths": [
+          "/Users/artharol/Workspace/ambit-systems/work/authority-calculus-prototype/audit/completion-20261117T071201Z/replay/issuance-fixture-03/runtime"
+        ],
+        "scope_tools": [],
+        "sub": "agent-a"
+      },
+      "origin_artifacts": {
+        "candidate.json": "{\"aud\":[\"6c5eec81a1a02b7c\"],\"authority_entry_hash\":\"c6d54d57a2be75ee91fdf9d14b027ff5e30852748f54c692833e11a01044e3a7\",\"bounds\":[{\"amount_scaled\":\"5000\",\"applies_to\":{\"actions\":[\"read\"]},\"kind\":\"commitment_amount\",\"unit\":\"AUD\"}],\"chain_depth\":0,\"exp\":\"2026-11-17T11:57:29.817Z\",\"iss\":\"Acme Pty Ltd\",\"jti\":\"entry:acme-reporting-01:r1:a1\",\"max_depth\":1,\"nbf\":\"2026-11-17T07:52:29.817Z\",\"parent_jti\":null,\"scope_actions\":[\"read\",\"delegate\"],\"scope_domains\":[\"filesystem\"],\"scope_paths\":[\"/Users/artharol/Workspace/ambit-systems/work/authority-calculus-prototype/audit/completion-20261117T071201Z/replay/issuance-fixture-03/runtime\"],\"scope_tools\":[],\"sub\":\"agent-a\"}",
+        "entry.json": "{\"bound\": {\"amount_scaled\": \"5000\", \"applies_to\": {\"actions\": [\"read\"]}, \"kind\": \"commitment_amount\", \"unit\": \"AUD\"}, \"effective_at\": \"2026-11-17T07:52:29.817605+00:00\", \"enforcement_points\": [\"6c5eec81a1a02b7c\"], \"entry_id\": \"acme-reporting-01\", \"exp\": \"2026-11-17T11:57:29.817605+00:00\", \"issuer_trust_root_id\": \"issuer-root\", \"max_depth\": 1, \"nbf\": \"2026-11-17T07:47:29.817605+00:00\", \"onward_delegation\": true, \"principal\": \"Acme Pty Ltd\", \"revision\": 1, \"schema_version\": \"1\", \"scope_actions\": [\"read\"], \"scope_domains\": [\"filesystem\"], \"scope_paths\": [\"/Users/artharol/Workspace/ambit-systems/work/authority-calculus-prototype/audit/completion-20261117T071201Z/replay/issuance-fixture-03/runtime\"], \"subject\": \"agent-a\"}",
+        "grant.slip": "eyJhdWQiOlsiNmM1ZWVjODFhMWEwMmI3YyJdLCJhdXRob3JpdHlfZW50cnlfaGFzaCI6ImM2ZDU0ZDU3YTJiZTc1ZWU5MWZkZjlkMTRiMDI3ZmY1ZTMwODUyNzQ4ZjU0YzY5MjgzM2UxMWEwMTA0NGUzYTciLCJib3VuZHMiOlt7ImFtb3VudF9zY2FsZWQiOiI1MDAwIiwiYXBwbGllc190byI6eyJhY3Rpb25zIjpbInJlYWQiXX0sImtpbmQiOiJjb21taXRtZW50X2Ftb3VudCIsInVuaXQiOiJBVUQifV0sImNoYWluX2RlcHRoIjowLCJleHAiOiIyMDI2LTExLTE3VDExOjU3OjI5LjgxN1oiLCJpc3MiOiJBY21lIFB0eSBMdGQiLCJqdGkiOiJlbnRyeTphY21lLXJlcG9ydGluZy0wMTpyMTphMSIsIm1heF9kZXB0aCI6MSwibmJmIjoiMjAyNi0xMS0xN1QwNzo1MjoyOS44MTdaIiwicGFyZW50X2p0aSI6bnVsbCwicmF0aWZpY2F0aW9uX2hhc2giOiIwZjE4YTNkZDM4YmJlNmE5NGJkMzEzZTg4ZWQ0ZDY5ZGMyNzMyMTJjYjA5M2Q4ZjNjYzY1NGFhYWM2ZDlhNjgyIiwic2NvcGVfYWN0aW9ucyI6WyJyZWFkIiwiZGVsZWdhdGUiXSwic2NvcGVfZG9tYWlucyI6WyJmaWxlc3lzdGVtIl0sInNjb3BlX3BhdGhzIjpbIi9Vc2Vycy9hcnRoYXJvbC9Xb3Jrc3BhY2UvYW1iaXQtc3lzdGVtcy93b3JrL2F1dGhvcml0eS1jYWxjdWx1cy1wcm90b3R5cGUvYXVkaXQvY29tcGxldGlvbi0yMDI2MTExN1QwNzEyMDFaL3JlcGxheS9pc3N1YW5jZS1maXh0dXJlLTAzL3J1bnRpbWUiXSwic2NvcGVfdG9vbHMiOltdLCJzdWIiOiJhZ2VudC1hIiwidHJ1c3Rfcm9vdF9pZCI6Imlzc3Vlci1yb290In0.ed25519:OiDJghmi+e/ZrkiX2HNVmHMYg/FvNqFAsrld7SzrhH0cAd3nLwk2uPQCpthLTYjRIDTFCffbTVNN8OE+cLoPDA==",
+        "ratification.slip": "eyJhdHRlbXB0IjoxLCJhdHRlbnVhdGlvbl9ydWxlX2hhc2giOiJlMTdhM2M3NmNjMDFjODgzODgwZGI5YmI0NGZmMDliMDE3OTVhMzUzMjYyMGIyOWVhMWVjMDU4M2M3M2IxOWY1IiwiYXV0aG9yaXR5X2VudHJ5X2hhc2giOiJjNmQ1NGQ1N2EyYmU3NWVlOTFmZGY5ZDE0YjAyN2ZmNWUzMDg1Mjc0OGY1NGM2OTI4MzNlMTFhMDEwNDRlM2E3IiwiY2FuZGlkYXRlX2NvcmVfaGFzaCI6ImI2ZDBlYTgxYjQxNzQxNTU4ZDQ3YzdlZDNhNTljOGMyY2NmYTQwZTFhZDI4NWYzMDg4MjNkZWEzMjViMjlmOTIiLCJlZmZlY3RpdmVfYXQiOiIyMDI2LTExLTE3VDA3OjUyOjI5LjgxN1oiLCJlbnRyeV9pZCI6ImFjbWUtcmVwb3J0aW5nLTAxIiwiZXhwIjoiMjAyNi0xMS0xN1QxMTo1NzoyOS44MTdaIiwiaXNzdWVyX3RydXN0X3Jvb3RfaWQiOiJpc3N1ZXItcm9vdCIsIm5iZiI6IjIwMjYtMTEtMTdUMDc6NTc6MjkuODI0WiIsInJhdGlmaWNhdGlvbl9pZCI6InJhdGlmaWNhdGlvbjphY21lLXJlcG9ydGluZy0wMTpyMTphMSIsInJhdGlmaWVkX2F0IjoiMjAyNi0xMS0xN1QwNzo1NzoyOS44MjRaIiwicmF0aWZpZXJfanRpIjoicmF0aWZpZXItbGVhZiIsInJhdGlmaWVyX2xlYWZfY29udGVudF9oYXNoIjoiNGU4YTI0NDg5OTBlNDkzOWM3ZjdmMGFkMWI4OTg5M2QwNjBiYjVjMzRhYjIwMjFlZThiZDcyM2Q0YzM0NGVkNSIsInJhdGlmaWVyX3BhcmVudHNfY29udGVudF9oYXNoIjoiYWNiNmIyNjc4YTNhNTJiZTYzZGZjNmI0YzEyZjNjNmM0NmZmNmY5YTRjZWFlYzJlMDNiMDdiMjZmZjFkZjJhNyIsInJhdGlmaWVyX3N1YiI6InJhdGlmaWVyLXJvb3QiLCJyYXRpZmllcl90cnVzdF9yb290X2lkIjoicmF0aWZpZXItcm9vdCIsInJldmlzaW9uIjoxLCJydWxlX3ZlcnNpb24iOiJhdXRob3JpdHlfZW50cnkvMTthdHRlbnVhdGlvbi81O3JhdGlmaWVyX3JlYWNoLzIiLCJzdGF0dXNfZXZpZGVuY2VfaGFzaGVzIjpbeyJoYXNoIjoiYzFlZGU3Yjg4NGEzMWQ3Zjk5YzYyYmNjNTBkNmFjZDQwMzgwM2UxOWFhYTQ0ZjJlZGYxMWY1MmM2Mzk2NWU3ZCIsImp0aSI6InJhdGlmaWVyLWxlYWYifSx7Imhhc2giOiI2MDI5MTllZDQwNmNkNmYwZjU3MDRjOWQwYzcyMmE2OTg5MWRlY2ExNTRiYTk2OTI5NTRmZmI1OTE4MGE1NDRiIiwianRpIjoicmF0aWZpZXItY2hhaW4tcm9vdCJ9XSwidHJ1c3Rfcm9vdF9pZCI6InJhdGlmaWVyLXJvb3QifQ.ed25519:eyWoeCMrzJ1TEk3DP244l58CQ+yMPLb51ztFw7FErbD5m33crTx1URzWu6WsCLGeRyD9IKD7QcT5kpQt0yQ6DA==",
+        "ratifier-leaf.slip": "eyJib3VuZHMiOlt7ImFtb3VudF9zY2FsZWQiOiI1MDAwIiwiYXBwbGllc190byI6eyJhY3Rpb25zIjpbInJlYWQiXX0sImtpbmQiOiJjb21taXRtZW50X2Ftb3VudCIsInVuaXQiOiJBVUQifV0sImNoYWluX2RlcHRoIjoxLCJleHAiOiIyMDI2LTExLTE3VDEzOjI3OjI5LjgxNzYwNSswMDowMCIsImlzcyI6IiIsImp0aSI6InJhdGlmaWVyLWxlYWYiLCJtYXhfZGVwdGgiOjEsIm5iZiI6IjIwMjYtMTEtMTdUMDc6Mjc6MjkuODE3NjA1KzAwOjAwIiwicGFyZW50X2p0aSI6InJhdGlmaWVyLWNoYWluLXJvb3QiLCJzY29wZV9hY3Rpb25zIjpbImRlbGVnYXRlIiwicmVhZCJdLCJzY29wZV9kb21haW5zIjpbImZpbGVzeXN0ZW0iXSwic2NvcGVfcGF0aHMiOlsiL1VzZXJzL2FydGhhcm9sL1dvcmtzcGFjZS9hbWJpdC1zeXN0ZW1zL3dvcmsvYXV0aG9yaXR5LWNhbGN1bHVzLXByb3RvdHlwZS9hdWRpdC9jb21wbGV0aW9uLTIwMjYxMTE3VDA3MTIwMVovcmVwbGF5L2lzc3VhbmNlLWZpeHR1cmUtMDMvcnVudGltZSJdLCJzY29wZV90b29scyI6W10sInN1YiI6InJhdGlmaWVyLXJvb3QiLCJ0cnVzdF9yb290X2lkIjoiZGVsZWdhdGlvbi1yb290In0.ed25519:6t2symvwG0U2SfHHJUqUtZjzsTSvlFwozogHpO3Il7csWI2mtoH5ktdmqGJGSP0ZnI/8aq4DlCEEUNxFtLUOBw==",
+        "ratifier-parent-0.slip": "eyJib3VuZHMiOlt7ImFtb3VudF9zY2FsZWQiOiI1MDAwIiwiYXBwbGllc190byI6eyJhY3Rpb25zIjpbInJlYWQiXX0sImtpbmQiOiJjb21taXRtZW50X2Ftb3VudCIsInVuaXQiOiJBVUQifV0sImNoYWluX2RlcHRoIjowLCJleHAiOiIyMDI2LTExLTE3VDE1OjU3OjI5LjgxNzYwNSswMDowMCIsImlzcyI6IiIsImp0aSI6InJhdGlmaWVyLWNoYWluLXJvb3QiLCJtYXhfZGVwdGgiOjEsIm5iZiI6IjIwMjYtMTEtMTdUMDY6NTc6MjkuODE3NjA1KzAwOjAwIiwic2NvcGVfYWN0aW9ucyI6WyJkZWxlZ2F0ZSIsInJlYWQiXSwic2NvcGVfZG9tYWlucyI6WyJmaWxlc3lzdGVtIl0sInNjb3BlX3BhdGhzIjpbIi9Vc2Vycy9hcnRoYXJvbC9Xb3Jrc3BhY2UvYW1iaXQtc3lzdGVtcy93b3JrL2F1dGhvcml0eS1jYWxjdWx1cy1wcm90b3R5cGUvYXVkaXQvY29tcGxldGlvbi0yMDI2MTExN1QwNzEyMDFaL3JlcGxheS9pc3N1YW5jZS1maXh0dXJlLTAzL3J1bnRpbWUiXSwic3ViIjoicmF0aWZpZXItcm9vdCIsInRydXN0X3Jvb3RfaWQiOiJkZWxlZ2F0aW9uLXJvb3QifQ.ed25519:cACP0V9rrjhm9/TMbDOk4cJ8delCjFt/BlLB9fUoH0E7IJI0NMh6CIpSkxfZpVTlwE3YrTkRiI0PZSTFy5x2Dw==",
+        "status-0.json": "{\"attestation\": \"ed25519:8cUUheG/0ft525j2SbuuvxGb6Ecd95LUNSbCiWNGrPrXzgQmupjzBIFeVJPAVXrfex4CbT0MnZVk8o+87sZFCw==\", \"checked_at\": \"2026-11-17T07:57:29.823Z\", \"freshness_bound_ms\": 600000, \"is_revoked\": false, \"jti\": \"ratifier-leaf\", \"revocation_epoch\": 0, \"source\": \"sqlite\", \"trust_root_id\": \"revocation-root\", \"verifiable\": true}",
+        "status-1.json": "{\"attestation\": \"ed25519:K/QkMxOOcioPLFwlqyYnqSK25U9isWQWmrpfDvGeKufyvBq7xKPcgvP3w5d5XPgRK/AK+QQIzWZnlxluZIT3Bw==\", \"checked_at\": \"2026-11-17T07:57:29.824Z\", \"freshness_bound_ms\": 600000, \"is_revoked\": false, \"jti\": \"ratifier-chain-root\", \"revocation_epoch\": 0, \"source\": \"sqlite\", \"trust_root_id\": \"revocation-root\", \"verifiable\": true}",
+        "trust_roots.json": "{\"delegation-root\": {\"public_key\": \"db995fe25169d141cab9bbba92baa01f9f2e1ece7df4cb2ac05190f37fcc1f9d\", \"scheme\": \"ed25519\"}, \"issuer-root\": {\"public_key\": \"2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12\", \"scheme\": \"ed25519\"}, \"ratifier-root\": {\"public_key\": \"22fc297792f0b6ffc0bfcfdb7edb0c0aa14e025a365ec0e342e86e3829cb74b6\", \"scheme\": \"ed25519\"}, \"workload-agent-1\": {\"public_key\": \"04f68b1de0f5ce686192f4bd0fd34163863f2e89d385f8bcfb85979533a57ac9b04f022ab6b096c8bf42804d8e67d38b3f88866980cc903f68fde9d2e143d93267\", \"registration\": {\"composition_hash\": \"abababababababababababababababababababababababababababababababab\", \"credential_kind\": \"workload\", \"key_fingerprint\": \"d12fb2a6953f71ca1db2bb3853709e1afa1835b83c0dd113b64eeadeddeb4913\", \"owner_of_record\": \"Acme Pty Ltd\", \"proof_of_possession\": \"MEUCIQCU+5mGS0xLtltq7fw+Jozy/a746BHOkjABM94A6EG37wIgZZD53sHeDzXe3AVbU//g19utHGwRTkSyd4LC9lbldPE=\", \"provisioning_ref\": \"deploy/acme/agent/0007\", \"public_key\": \"04f68b1de0f5ce686192f4bd0fd34163863f2e89d385f8bcfb85979533a57ac9b04f022ab6b096c8bf42804d8e67d38b3f88866980cc903f68fde9d2e143d93267\", \"registered_at\": \"2026-08-04T00:00:00+00:00\", \"registration_root_id\": \"org-enrolment-1\", \"registration_signature\": \"ed25519:VQoVNGHMz9X3JB0jbwVLQKKszCWvOiP8f23tmFSNE/ual2QeDNmrkOYHxfSiZAhgeraHkKXG7rt0bGRvcDXNAQ==\", \"schema_version\": \"1\", \"scheme\": \"p256\", \"subject\": \"agent-a\", \"trust_root_id\": \"workload-agent-1\"}, \"scheme\": \"p256\"}}"
+      },
+      "parent_statuses": [
+        {
+          "attestation": "ed25519:CHuJO8ZKc+7+/whCMtk46wrAXX32SfYm9XrCr+fMQ6IziNTcrRRPNa6Jf7R2P1/cOBCGRx3slwl9C43clLziBA==",
+          "checked_at": "2026-11-17T07:57:29.837615+00:00",
+          "freshness_bound_ms": 60000,
+          "freshness_evaluated_at": "2026-11-17T07:57:29.837976+00:00",
+          "is_revoked": false,
+          "jti": "entry:acme-reporting-01:r1:a1",
+          "revocation_epoch": 0,
+          "source": "sqlite",
+          "trust_root_id": "revocation-root",
+          "verifiable": true
+        }
+      ],
+      "profile": "admitted-child-issuance/1",
+      "revocation_epoch_floor": 0
+    }
+  },
+  {
+    "allocation": null,
+    "change_record_hash": null,
+    "child_jtis": null,
+    "content_hash": "fef071816552b6793af0d3b05bf710a86d6dbc000d2bf4cacb8fa3575bf5ad02",
+    "entry_id": null,
+    "event": "identity_pinned",
+    "grant": null,
+    "grant_jti": null,
+    "jti": "admitted-child",
+    "kind": null,
+    "limit_type": null,
+    "parent_jti": null,
+    "prev_hash": "e53f92898cab3b2de32211a1b689418b3c143c06a1e0d7fa82d5287e448d72c8",
+    "record_hash": "472a8592284f813e5a0824e40cfe528b86b354859c551029d26e3beb8d865425",
+    "record_type": "issuance_event",
+    "recorded_at": "2026-11-17T07:57:29.846586+00:00",
+    "revision": null,
+    "seq": 3,
+    "timestamp_utc": "2026-11-17T07:57:29.847Z",
+    "unit": null
+  },
+  {
+    "allocation": null,
+    "change_record_hash": null,
+    "child_jtis": null,
+    "content_hash": "8e726ef38afbb2efa7bfffa602d3249144355a636b625a373817fb78fc171257",
+    "entry_id": null,
+    "event": "identity_pinned",
+    "grant": null,
+    "grant_jti": null,
+    "jti": "entry:acme-reporting-01:r1:a1",
+    "kind": null,
+    "limit_type": null,
+    "parent_jti": null,
+    "prev_hash": "472a8592284f813e5a0824e40cfe528b86b354859c551029d26e3beb8d865425",
+    "record_hash": "60a2d63fdc47e096b34a8e89ead1b373eb22257ad7242c1ace8ad16488684f06",
+    "record_type": "issuance_event",
+    "recorded_at": "2026-11-17T07:57:29.846586+00:00",
+    "revision": null,
+    "seq": 4,
+    "timestamp_utc": "2026-11-17T07:57:29.847Z",
+    "unit": null
+  },
+  {
+    "allocation": null,
+    "change_record_hash": null,
+    "child_jtis": null,
+    "content_hash": null,
+    "entry_id": null,
+    "event": "committed",
+    "grant": null,
+    "grant_jti": null,
+    "jti": "admitted-child",
+    "kind": null,
+    "limit_type": null,
+    "parent_jti": null,
+    "prev_hash": "60a2d63fdc47e096b34a8e89ead1b373eb22257ad7242c1ace8ad16488684f06",
+    "record_hash": "9f0cb55330ced6e047c4c56cd97530955f00ad2afab4e242482a668a9aeeeec4",
+    "record_type": "issuance_event",
+    "recorded_at": "2026-11-17T07:57:29.848950+00:00",
+    "revision": null,
+    "seq": 5,
+    "timestamp_utc": "2026-11-17T07:57:29.849Z",
+    "unit": null,
+    "verification_evidence": {
+      "profile": "admitted-child-issuance/1",
+      "signed_token": "eyJhdWQiOlsiNmM1ZWVjODFhMWEwMmI3YyJdLCJhdXRob3JpdHlfZW50cnlfaGFzaCI6ImM2ZDU0ZDU3YTJiZTc1ZWU5MWZkZjlkMTRiMDI3ZmY1ZTMwODUyNzQ4ZjU0YzY5MjgzM2UxMWEwMTA0NGUzYTciLCJib3VuZHMiOlt7ImFtb3VudF9zY2FsZWQiOiIxIiwiYXBwbGllc190byI6eyJhY3Rpb25zIjpbInJlYWQiXX0sImtpbmQiOiJjb21taXRtZW50X2Ftb3VudCIsInVuaXQiOiJBVUQifV0sImNoYWluX2RlcHRoIjoxLCJleHAiOiIyMDI2LTExLTE3VDA3OjU4OjI5LjgzNDExMiswMDowMCIsImlzcyI6IkFjbWUgUHR5IEx0ZCIsImp0aSI6ImFkbWl0dGVkLWNoaWxkIiwibWF4X2RlcHRoIjoxLCJuYmYiOiIyMDI2LTExLTE3VDA3OjU3OjI5LjgzODU1NiswMDowMCIsInBhcmVudF9qdGkiOiJlbnRyeTphY21lLXJlcG9ydGluZy0wMTpyMTphMSIsInJhdGlmaWNhdGlvbl9oYXNoIjoiMGYxOGEzZGQzOGJiZTZhOTRiZDMxM2U4OGVkNGQ2OWRjMjczMjEyY2IwOTNkOGYzY2M2NTRhYWFjNmQ5YTY4MiIsInNjb3BlX2FjdGlvbnMiOlsicmVhZCJdLCJzY29wZV9kb21haW5zIjpbImZpbGVzeXN0ZW0iXSwic2NvcGVfcGF0aHMiOlsiL1VzZXJzL2FydGhhcm9sL1dvcmtzcGFjZS9hbWJpdC1zeXN0ZW1zL3dvcmsvYXV0aG9yaXR5LWNhbGN1bHVzLXByb3RvdHlwZS9hdWRpdC9jb21wbGV0aW9uLTIwMjYxMTE3VDA3MTIwMVovcmVwbGF5L2lzc3VhbmNlLWZpeHR1cmUtMDMvcnVudGltZSJdLCJzY29wZV90b29scyI6W10sInN1YiI6ImFnZW50LWEiLCJ0cnVzdF9yb290X2lkIjoiaXNzdWVyLXJvb3QifQ.ed25519:faiRmOvKF77lARtMR4cPn/oaO83ANBfhi87NRxoQti4gqo0v/jVD9BDu49sI2rdnXac/gTFF6u6fUz9TsyTjBw=="
+    }
+  }
+]

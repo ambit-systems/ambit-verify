@@ -1,0 +1,14 @@
+{
+  "admission_trust_roots_by_adapter": {
+    "core-test-adapter": {
+      "admission-root": {
+        "scheme": "ed25519",
+        "public_key": "ed6a47a39da869b5446155e40b2d93f1e3f0167be26732bae7a3ef9d8e3a3fd3"
+      }
+    }
+  },
+  "expected_domain": "filesystem",
+  "expected_ledger_id": "core-live-test-ledger",
+  "enforcement_point_id": "6c5eec81a1a02b7c",
+  "enforcement_point_public_key": "0000000000000000000000000000000000000000000000000000000000000000"
+}

@@ -233,3 +233,8 @@ __all__ = [
     "verify_resource_outcome",
     "verify_witnessed_head",
 ]
+
+from .lifecycle import replay_execution_prefix, verify_execution_prefix
+from .lifecycle_models import ExecutionPrefixVerification
+
+__all__ += ["ExecutionPrefixVerification", "replay_execution_prefix", "verify_execution_prefix"]

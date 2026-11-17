@@ -1,0 +1,34 @@
+{
+  "credential_trust_roots": {
+    "delegation-root": {
+      "scheme": "ed25519",
+      "public_key": "c050c5637a44fa8629fff3cccce2300cb362a63d99d95fc54145266f4332445a"
+    },
+    "revoker-root": {
+      "scheme": "ed25519",
+      "public_key": "2012cb90ca60e8e5d8daf66e2272d2233e0486d557e8c66141ed8920177d7eb7"
+    },
+    "other-root": {
+      "scheme": "ed25519",
+      "public_key": "9f49439e9db095bc4111ed25d35795d831bc55a047f4b1d7f6aee3777bb41220"
+    }
+  },
+  "revoker_trust_roots": {
+    "delegation-root": {
+      "scheme": "ed25519",
+      "public_key": "c050c5637a44fa8629fff3cccce2300cb362a63d99d95fc54145266f4332445a"
+    },
+    "revoker-root": {
+      "scheme": "ed25519",
+      "public_key": "2012cb90ca60e8e5d8daf66e2272d2233e0486d557e8c66141ed8920177d7eb7"
+    },
+    "other-root": {
+      "scheme": "ed25519",
+      "public_key": "9f49439e9db095bc4111ed25d35795d831bc55a047f4b1d7f6aee3777bb41220"
+    }
+  },
+  "revocation_attestation_public_keys": {
+    "revocation-root": "f80cccdce4ae1c07ae208a2adf99a310ae4207e0306fa0236110b06827bbb8d0"
+  },
+  "credential_registration_public_keys": {}
+}
