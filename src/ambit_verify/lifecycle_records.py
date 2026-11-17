@@ -114,11 +114,7 @@ def _unsigned_generic_fence(record: Mapping[str, Any], links: OperationLinks) ->
     descriptor = _operation(decision)
     assert descriptor is not None
     expected = {name: descriptor[name] for name in ("operation_id", "request_hash", "payload_hash")}
-    if (
-        not generic
-        or decision["consumption"]["accounts"]
-        or record.get("dispatch_claims") != expected
-    ):
+    if not generic or record.get("dispatch_claims") != expected:
         raise ValueError("unsigned generic fence has unsupported action or accounting claims")
 
 

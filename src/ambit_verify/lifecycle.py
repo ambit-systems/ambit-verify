@@ -113,6 +113,7 @@ def replay_execution_prefix(
     enforcement_point_id: str,
     enforcement_point_public_key: str,
     revocation_policy: Mapping[str, Any] | None = None,
+    generic_quantity_policy: Mapping[str, Any] | None = None,
     profile: str = LIFECYCLE_PROFILE,
 ) -> ExecutionPrefixVerification:
     """Check lifecycle and accounting semantics of an authenticated complete prefix.
@@ -181,6 +182,7 @@ def replay_execution_prefix(
             enforcement_point_public_key=enforcement_point_public_key,
             allow_unconsumed_dry_runs=True,
             strict_lifecycle=True,
+            generic_quantity_policy=generic_quantity_policy,
         )
         issuance_coverage, issuances = replay_issuance_records(
             records,
@@ -230,6 +232,7 @@ def verify_execution_prefix(
     expected_ledger_id: str,
     expected_head: Mapping[str, Any],
     revocation_policy: Mapping[str, Any] | None = None,
+    generic_quantity_policy: Mapping[str, Any] | None = None,
     profile: str = LIFECYCLE_PROFILE,
 ) -> ExecutionPrefixVerification:
     """Authenticate a complete bundle before replaying its lifecycle prefix."""
@@ -289,5 +292,6 @@ def verify_execution_prefix(
         enforcement_point_id=registration.enforcement_point_id,
         enforcement_point_public_key=registration.public_key,
         revocation_policy=revocation_policy,
+        generic_quantity_policy=generic_quantity_policy,
         profile=profile,
     )

@@ -210,7 +210,9 @@ def _period_start_is_authorized(
         return False
 
 
-def _accounting(decision: Mapping[str, Any]) -> None:
+def _accounting(
+    decision: Mapping[str, Any], *, generic_quantity_policy: Mapping[str, Any] | None = None
+) -> None:
     validate_consumption_record(decision)
     consumption = decision["consumption"]
     if consumption.get("state") != "authorized":
@@ -293,13 +295,18 @@ def _accounting(decision: Mapping[str, Any]) -> None:
     if not isinstance(accounts, list) or len(accounts) != len(expected):
         raise ValueError("operation accounting is incomplete")
     if profile is None or (profile == CUSTOMER_DELETE_PROFILE and tool_name != "customer.delete"):
-        # Generic calls may share the ledger without claiming a signed effect.
-        # An empty obligation set is independently checkable; generic quantitative
-        # debits need their own supported derivation, never a trusted claimed amount.
-        if expected:
-            raise ValueError("generic quantitative operation accounting is not established")
-        return
-    if profile == "record-egress/1":
+        # Generic calls retain obligations without claiming a signed effect.
+        if not expected:
+            return
+        from .generic_quantities import generic_quantities
+
+        quantities = generic_quantities(
+            policy=generic_quantity_policy,
+            action_type=action_type,
+            action_boundary=action_boundary,
+            arguments=arguments,
+        )
+    elif profile == "record-egress/1":
         if not isinstance(arguments.get("records"), list) or not arguments["records"]:
             raise ValueError("record-egress decision lacks exact records")
         quantities = {
@@ -367,7 +374,10 @@ def _accounting(decision: Mapping[str, Any]) -> None:
         )
         if match is None:
             raise ValueError("operation account does not match a required signed bound")
-        if int(account["amount_scaled"]) != quantities[(match["kind"], match["unit"])]:
+        quantity = quantities.get((match["kind"], match["unit"]))
+        if quantity is None:
+            raise ValueError("required signed bound has no independently derived quantity")
+        if int(account["amount_scaled"]) != quantity:
             raise ValueError("cumulative debit does not equal the exact resource quantity")
         unmatched.remove(match)
     if unmatched:
@@ -765,6 +775,7 @@ def _replay_prefix(
     enforcement_point_public_key: str,
     allow_unconsumed_dry_runs: bool = False,
     strict_lifecycle: bool = False,
+    generic_quantity_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Replay every current operation's retained accounting/transition evidence."""
     decisions: dict[str, Mapping[str, Any]] = {}
@@ -891,7 +902,7 @@ def _replay_prefix(
                     raise ValueError(
                         "authorized decision consumed identifiers differ from verified facts"
                     )
-                _accounting(record)
+                _accounting(record, generic_quantity_policy=generic_quantity_policy)
             operation_states[operation_id] = consumption["state"]
             decisions[operation_id] = record
             identifiers = consumption["consumed_identifiers"]
