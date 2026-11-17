@@ -17,6 +17,8 @@ The result separates these properties:
 
 An unresolved operation can have valid and complete prefix coverage. This does not establish progress. Unknown execution remains charged. A pre-dispatch release needs the recorded no-dispatch basis. A fenced release needs an independently signed `not_executed` outcome. A current Git commitment also needs the exact native Start record and its accepted time.
 
+An unsigned generic fence can establish only the existing unresolved transport state. It must retain the exact operation, request and payload hashes. Its independently checked numeric obligation set must be empty. It cannot establish native Start, settlement or release. A transport reply does not resolve its external result.
+
 Each intent, transport observation, dispatch, native Start, and terminal must join its exact earlier operation. Transport success is an observation, not executor confirmation. Independent executor evidence establishes the retained terminal claim. The verifier checks every operation in the prefix, including earlier operations and cross-party clearance. It does not check only a selected terminal.
 
 Live child issuance uses `admitted-child-issuance/1`. A reservation retains the exact child claims, prior holder-authentication hash, admitted origin artefacts, and signed parent status evidence. Commitment retains the exact signed child token. Replay checks authority, narrowing, permanent identity pins, and aggregate sibling allocation. Legacy issuance records retain their original meaning and remain unsupported for complete authority verification. Offline activation and legacy allocation migration records also remain unsupported.

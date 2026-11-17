@@ -102,6 +102,26 @@ def _transport(record: Mapping[str, Any], links: OperationLinks) -> None:
     links.transports.append(record)
 
 
+def _unsigned_generic_fence(record: Mapping[str, Any], links: OperationLinks) -> None:
+    decision = links.decision
+    evidence = decision["evidence"]
+    binding = evidence["authority_admission"]["resource_binding"]
+    call = evidence["request_envelope"]["call"]
+    profile = binding.get("outcome_profile")
+    generic = profile is None or (
+        profile == "customer-delete/1" and call.get("name") != "customer.delete"
+    )
+    descriptor = _operation(decision)
+    assert descriptor is not None
+    expected = {name: descriptor[name] for name in ("operation_id", "request_hash", "payload_hash")}
+    if (
+        not generic
+        or decision["consumption"]["accounts"]
+        or record.get("dispatch_claims") != expected
+    ):
+        raise ValueError("unsigned generic fence has unsupported action or accounting claims")
+
+
 def validate_lifecycle_links(
     records: Sequence[Mapping[str, Any]],
     *,
@@ -155,6 +175,8 @@ def validate_lifecycle_links(
             links = operations.get(identity)
             if links is None or links.fence is None or links.settlement is not None:
                 raise ValueError("native Start lacks an unresolved earlier operation fence")
+            if links.fence.get("dispatch_token") is None:
+                raise ValueError("unsigned generic fence cannot establish native Start")
             if links.start is not None:
                 raise ValueError("duplicate native Start")
             validate_start_history(
@@ -179,9 +201,12 @@ def validate_lifecycle_links(
                     if record.get("intent_hash") != links.intent["record_hash"]:
                         raise ValueError("dispatch fence changes its canonical intent")
                     token, claims = record.get("dispatch_token"), record.get("dispatch_claims")
-                    if not isinstance(token, str) or not isinstance(claims, Mapping):
-                        raise ValueError("lifecycle profile requires independently signed dispatch")
-                    if verify_dispatch(token, public_key=enforcement_point_public_key) != dict(
+                    if token is None:
+                        _unsigned_generic_fence(record, links)
+                        reason = "generic transport fenced; external result remains unknown"
+                    elif not isinstance(token, str) or not isinstance(claims, Mapping):
+                        raise ValueError("lifecycle dispatch evidence is malformed")
+                    elif verify_dispatch(token, public_key=enforcement_point_public_key) != dict(
                         claims
                     ):
                         raise ValueError("dispatch signature differs from the retained claims")
@@ -203,6 +228,10 @@ def validate_lifecycle_links(
                     links.resume = record
                     links.pending = None
                 elif event == "settlement":
+                    if links.fence is not None and links.fence.get("dispatch_token") is None:
+                        raise ValueError(
+                            "unsigned generic fence cannot establish a terminal outcome"
+                        )
                     if links.settlement is not None:
                         raise ValueError("duplicate terminal settlement")
                     if links.fence is not None:
