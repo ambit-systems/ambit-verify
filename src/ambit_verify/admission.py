@@ -1122,8 +1122,14 @@ def verify_foreign_dispatch(
         or not isinstance(request.get("actor"), Mapping)
         or request["actor"].get("id") != expected_actor
         or decision.get("actor_id") != expected_actor
-        or not isinstance(operation, Mapping)
-        or operation.get("actor_key_fingerprint") != expected_fingerprint
+        or (
+            not isinstance(operation, Mapping)
+            and not (consumption is None and decision.get("decision") in {"DENY", "ESCALATE"})
+        )
+        or (
+            isinstance(operation, Mapping)
+            and operation.get("actor_key_fingerprint") != expected_fingerprint
+        )
         or not isinstance(action, Mapping)
         or not isinstance(target, Mapping)
         or not isinstance(call, Mapping)

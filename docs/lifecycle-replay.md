@@ -32,3 +32,5 @@ The Authority live emitter inventory includes decisions, intents, dispatch and c
 This verifier does not rerun the policy evaluator. Observatory's lifecycle profile also reruns every decision and compares the full ordered rule trace. The verifier does not prove that an executor reported physical effects truthfully, that a producer recorded every effect, or that a newer remote head does not exist. Key custody, independent head retention, exclusive writers, service scheduling, and external resource behavior remain operating obligations.
 
 An authenticated genesis prefix is healthy for recovery discovery and returns no work. A qualification workload must be nonempty. No finite test result is a universal proof.
+
+A foreign request can produce `DENY` or `ESCALATE` before it reserves authority. Foreign identity verification accepts an absent consumption block only for these two decisions. It still verifies the signed dispatch, exact actor and action, B's signed context, admitted point map, and fresh statuses. `ALLOW` requires the operation and its actor-key fingerprint. A malformed consumption block is not equivalent to an absent block.
