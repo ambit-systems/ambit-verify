@@ -61,3 +61,18 @@ def test_terminal_cannot_substitute_another_action_under_the_started_identity():
     }
     with pytest.raises(ValueError, match="native_start_terminal_operation_mismatch"):
         validate_terminal_start(outcome, [start])
+
+
+def test_terminal_record_cannot_select_another_operation_to_skip_start_check():
+    _authority, resource, _request, _request_token, start = _material()
+    outcome = {**_outcome("committed"), "operation_id": "another-operation"}
+    with pytest.raises(ValueError, match="native_start_terminal_operation_mismatch"):
+        validate_terminal_start_record(
+            {
+                "record_type": "consumption",
+                "event": "settlement",
+                "operation": {name: start[name] for name in ("domain_id", "operation_id")},
+                "resource_outcome": _token(outcome, outcome_message(outcome), resource),
+            },
+            [start],
+        )

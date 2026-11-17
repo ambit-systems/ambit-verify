@@ -330,4 +330,6 @@ def validate_terminal_start_record(
     if not isinstance(token, str):
         raise ValueError("native_start_terminal_outcome_missing")
     outcome = verify_resource_outcome(token, public_key=starts[0]["resource_public_key"])
+    if any(outcome.get(name) != operation.get(name) for name in ("domain_id", "operation_id")):
+        raise ValueError("native_start_terminal_operation_mismatch")
     validate_terminal_start(outcome, starts)
