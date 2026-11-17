@@ -78,6 +78,13 @@ verifier described below.
 
 ## Verify a retained canonical operation
 
+When a canonical operation retains a `native_start` record, its committed
+resource outcome must retain that Start's exact `accepted_at` value. A different
+time fails even when it lies within the dispatch interval. Negative and unknown
+outcomes keep their profile's null acceptance time. Historical operations without
+a Start record retain their earlier verification contract; their verification
+does not establish the strict Start contract.
+
 `verify_execution_bundle` verifies one complete, caller-pinned canonical
 operation prefix using public material only. It is for a **committed effect**
 claim: it checks the selected operation's retained authority, canonical

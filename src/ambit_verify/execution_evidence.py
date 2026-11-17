@@ -35,6 +35,7 @@ from .foreign_revocation import (
 from .hashing import canonical_json_bytes, hash_object, sha256_hex
 from .head_attestation import ATTESTATION_BLOCK_KEYS, HeadAttestation
 from .head_attestation_ed25519 import Ed25519HeadVerifier
+from .native_start import validate_terminal_start
 from .resource_protocol import (
     CUSTOMER_DELETE_PROFILE,
     counterparty_foreign_descriptor_hash,
@@ -1453,6 +1454,7 @@ def _replay_prefix(
                 outcome = verify_resource_outcome(
                     record["resource_outcome"], public_key=outcome_key
                 )
+                validate_terminal_start(outcome, records)
                 dispatch_claims = fence.get("dispatch_claims")
                 if not isinstance(dispatch_claims, Mapping) or any(
                     outcome.get(name) != dispatch_claims.get(name)
@@ -1872,6 +1874,7 @@ def verify_execution_bundle(
         ):
             raise ValueError("terminal settlement lacks a signed resource outcome")
         outcome = verify_resource_outcome(settlement["resource_outcome"], public_key=resource_key)
+        validate_terminal_start(outcome, records)
         accepted_at = outcome.get("accepted_at")
         if accepted_at is not None:
             accepted = _moment(accepted_at)

@@ -15,7 +15,11 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from .hashing import canonical_json_bytes, strict_json_loads
-from .resource_protocol import dispatch_revocation_identity, verify_dispatch
+from .resource_protocol import (
+    dispatch_revocation_identity,
+    verify_dispatch,
+    verify_resource_outcome,
+)
 
 PROFILE = "native-start/1"
 JOIN_FIELDS = (
@@ -274,3 +278,56 @@ def validate_start_history(
             for jti, expiry in earlier.get("rows", []):
                 if jti in chain[0] and (expiry is None or expiry > accepted.timestamp()):
                     raise ValueError("native_start_follows_revocation")
+
+
+def validate_terminal_start(
+    outcome: Mapping[str, Any], records: Sequence[Mapping[str, Any]]
+) -> None:
+    """Bind a committed terminal to its retained exact Start and acceptance time.
+
+    Historical operations without a Start keep their existing interval checks.
+    Negative and unknown outcomes retain their profile's null acceptance time.
+    The caller must verify the outcome signature and the Start history first.
+    """
+    starts = [
+        record
+        for record in records
+        if record.get("record_type") == "native_start"
+        and all(record.get(name) == outcome.get(name) for name in ("domain_id", "operation_id"))
+    ]
+    if len(starts) > 1:
+        raise ValueError("native_start_duplicate_record")
+    if not starts or outcome.get("status") != "committed":
+        return
+    start = starts[0]
+    if any(start.get(name) != outcome.get(name) for name in JOIN_FIELDS):
+        raise ValueError("native_start_terminal_operation_mismatch")
+    if outcome.get("accepted_at") != start.get("accepted_at"):
+        raise ValueError("native_start_terminal_acceptance_mismatch")
+
+
+def validate_terminal_start_record(
+    record: Mapping[str, Any], preceding: Sequence[Mapping[str, Any]]
+) -> None:
+    """Check a terminal record under a canonical append lock or during rebuild."""
+    if record.get("record_type") != "consumption" or record.get("event") not in {
+        "settlement",
+        "counterparty_recovered",
+    }:
+        return
+    operation = record.get("operation")
+    if not isinstance(operation, Mapping):
+        return  # The consumption grammar rejects this case.
+    starts = [
+        start
+        for start in preceding
+        if start.get("record_type") == "native_start"
+        and all(start.get(name) == operation.get(name) for name in ("domain_id", "operation_id"))
+    ]
+    if not starts:
+        return
+    token = record.get("resource_outcome")
+    if not isinstance(token, str):
+        raise ValueError("native_start_terminal_outcome_missing")
+    outcome = verify_resource_outcome(token, public_key=starts[0]["resource_public_key"])
+    validate_terminal_start(outcome, starts)
