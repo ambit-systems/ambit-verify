@@ -145,6 +145,10 @@ def _records(value: object, *, expected_head: Mapping[str, Any]) -> tuple[Mappin
         previous = record_hash
         if record.get("record_type") == "consumption" or record.get("consumption") is not None:
             validate_consumption_record(record)
+        if record.get("record_type") == "native_start":
+            from .native_start import validate_start_history
+
+            validate_start_history(record, result)
         result.append(record)
     if len(result) != expected_head["seq"] or previous != expected_head["record_hash"]:
         raise ValueError("bundle prefix does not end at the caller-pinned head")
@@ -1722,6 +1726,15 @@ def verify_execution_bundle(
             registration_raw,
             registration_public_keys=enforcement_point_registration_public_keys,
         )
+        for start in records:
+            if start.get("record_type") == "native_start":
+                from .native_start import validate_start_history
+
+                validate_start_history(
+                    start,
+                    [r for r in records if r["seq"] < start["seq"]],
+                    authority_public_key=registration.public_key,
+                )
         if (
             registration.enforcement_point_id != descriptor["enforcement_point_id"]
             or registration.ledger_id != expected_ledger_id
