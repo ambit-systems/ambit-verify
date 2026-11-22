@@ -7,6 +7,9 @@ Exit codes: 0 when every requested check passes, 1 when a check fails,
 2 for a usage or I/O problem. Stdout carries exactly one line:
 ``PASS count=N`` or ``FAIL: <reason>``.
 
+With ``--report json`` stdout carries one JSON object with a result per claim
+instead. The exit codes do not change.
+
 Usage errors (bad flag combinations, keys that are not 32 hex bytes, and empty
 ids) are raised by the parser before any verification runs.
 """
@@ -16,11 +19,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
+from .cli_report import FAIL, NOT_CHECKED, PASS, ClaimOutcome, build_report
 from .hashing import strict_json_loads
 from .head_attestation import HeadAttestation, HeadVerifier
 from .head_attestation_ed25519 import Ed25519CountersignVerifier, Ed25519HeadVerifier
@@ -128,6 +132,12 @@ def _build_parser() -> argparse.ArgumentParser:
         type=_hex_key,
         metavar="HEX",
         help="Ed25519 public key (32 bytes, hex) of the checkpoint countersigner",
+    )
+    parser.add_argument(
+        "--report",
+        choices=("text", "json"),
+        default="text",
+        help="output format: one PASS/FAIL line (text) or one JSON object per claim (json)",
     )
     return parser
 
@@ -250,8 +260,25 @@ def _checkpoint_check(
         raise _CheckError(f"checkpoint: {error}")
 
 
-def _verify(args: argparse.Namespace) -> int:
-    """Run every requested check against one ledger snapshot."""
+_HASH_FAILURES = ("record_hash mismatch", "missing/invalid record_hash")
+
+
+def _chain_outcomes(chain: _Chain) -> dict[str, ClaimOutcome]:
+    """Split the one-pass ledger walk into the record-hash and chain claims."""
+    if chain.ok:
+        return {"record_hashes": ClaimOutcome(PASS), "chain": ClaimOutcome(PASS)}
+    reason = chain.error or "verification failed"
+    # The walk stops at the first bad record and reports it as one message. A hash
+    # failure ends with one of the two hash messages. Any other reason is a chain failure.
+    claim = "record_hashes" if reason.endswith(_HASH_FAILURES) else "chain"
+    return {claim: ClaimOutcome(FAIL, reason)}
+
+
+def _verify(args: argparse.Namespace, outcomes: dict[str, ClaimOutcome]) -> int:
+    """Run every requested check against one ledger snapshot.
+
+    Each claim that runs adds its outcome to *outcomes*, in the order the checks run.
+    """
     checkpoint: Mapping[str, Any] | None = None
     checkpoint_failure: _CheckError | OSError | None = None
     want_seq = 0
@@ -266,24 +293,64 @@ def _verify(args: argparse.Namespace) -> int:
                 want_seq = candidate
 
     chain = _walk_ledger(Path(args.ledger).expanduser(), want_seq=want_seq)
+    outcomes.update(_chain_outcomes(chain))
     if args.public_key is not None:
-        verifier, attestation = _head_check(args)
+        try:
+            verifier, attestation = _head_check(args)
+        except _CheckError as exc:
+            outcomes["head_attestation"] = ClaimOutcome(FAIL, str(exc))
+            raise
         ok, count, error = verify_chain(
             args.ledger, verifier=verifier, attestation=attestation, _chain=chain
         )
+        if ok:
+            outcomes["head_attestation"] = ClaimOutcome(PASS)
     else:
         ok, count, error = verify_chain(args.ledger, _chain=chain)
     if not ok:
-        raise _CheckError(error or "verification failed")
+        reason = error or "verification failed"
+        if chain.ok:
+            outcomes["head_attestation"] = ClaimOutcome(FAIL, reason)
+        raise _CheckError(reason)
     if args.witness is not None:
-        _witness_check(args, chain)
+        _record(outcomes, "witness", lambda: _witness_check(args, chain))
     if args.checkpoint is not None:
         if checkpoint_failure is not None:
             raise checkpoint_failure
         if checkpoint is None:
             raise _CheckError("checkpoint: checkpoint is unavailable")
-        _checkpoint_check(args, checkpoint, chain)
+        _record(outcomes, "checkpoint", lambda: _checkpoint_check(args, checkpoint, chain))
     return count
+
+
+def _record(outcomes: dict[str, ClaimOutcome], claim: str, check: Callable[[], None]) -> None:
+    """Run *check* and record its outcome. A failure is recorded and raised again."""
+    try:
+        check()
+    except _CheckError as exc:
+        outcomes[claim] = ClaimOutcome(FAIL, str(exc))
+        raise
+    outcomes[claim] = ClaimOutcome(PASS)
+
+
+def _requested_claims(args: argparse.Namespace) -> set[str]:
+    """Return the claims the command line asks for beyond the ledger walk."""
+    requested = set()
+    if args.public_key is not None:
+        requested.add("head_attestation")
+    if args.witness is not None:
+        requested.add("witness")
+    if args.checkpoint is not None:
+        requested.add("checkpoint")
+    return requested
+
+
+def _json_report(args: argparse.Namespace, outcomes: dict[str, ClaimOutcome]) -> str:
+    """Render the report. A requested claim that never ran is ``not_checked`` with a reason."""
+    for claim in _requested_claims(args) - outcomes.keys():
+        outcomes[claim] = ClaimOutcome(NOT_CHECKED, "not run: an earlier claim failed")
+    report = build_report(str(args.ledger), outcomes)
+    return json.dumps(report, ensure_ascii=True, allow_nan=False)
 
 
 def _credential_command(argv: Sequence[str]) -> int:
@@ -437,15 +504,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(arguments)
     _check_flags(parser, args)
+    outcomes: dict[str, ClaimOutcome] = {}
     try:
-        count = _verify(args)
+        count = _verify(args, outcomes)
     except _CheckError as exc:
-        print(f"FAIL: {_terminal_safe(exc)}")
+        if args.report == "json":
+            print(_json_report(args, outcomes))
+        else:
+            print(f"FAIL: {_terminal_safe(exc)}")
         return 1
     except OSError as exc:
         print(f"ambit-verify: error: {_terminal_safe(exc)}", file=sys.stderr)
         return 2
-    print(f"PASS count={count}")
+    print(_json_report(args, outcomes) if args.report == "json" else f"PASS count={count}")
     return 0
 
 

@@ -348,6 +348,7 @@ ambit-verify LEDGER
   [--attestation PATH] [--public-key HEX] [--trust-root-id ID]
   [--witness PATH --witnessed-ledger-id ID --witness-public-key HEX [--witness-trust-root-id ID]]
   [--checkpoint PATH --witness-public-key HEX --countersign-public-key HEX [--witness-trust-root-id ID]]
+  [--report {text,json}]
 ```
 
 Verify the chain:
@@ -412,6 +413,16 @@ Stdout carries exactly one line.
 Order of checks: chain, head attestation, witness, checkpoint. The first
 failure is reported.
 All requested checks in one command use the same parsed ledger snapshot.
+
+### Per-claim report
+
+Add `--report json` to print one JSON object with a result for each claim, in place of the `PASS`/`FAIL` line. The claims are `record_hashes`, `chain`, `head_attestation`, `witness` and `checkpoint`. A claim is `pass`, `fail` or `not_checked`. A claim is `not_checked` when its inputs were not supplied, or when an earlier claim failed first. `detail` holds the failure reason, or the reason a claim did not run, and is `null` otherwise. The top-level `result` is `pass` only when no claim failed. Exit codes are the same as in text mode.
+
+```
+$ ambit-verify samples/five-receipts/evidence.jsonl --report json \
+    --public-key "$(cat samples/five-receipts/evidence.jsonl.attest-public-key)"
+{"ledger": "samples/five-receipts/evidence.jsonl", "result": "pass", "claims": [{"claim": "record_hashes", "result": "pass", "detail": null}, {"claim": "chain", "result": "pass", "detail": null}, {"claim": "head_attestation", "result": "pass", "detail": null}, {"claim": "witness", "result": "not_checked", "detail": null}, {"claim": "checkpoint", "result": "not_checked", "detail": null}]}
+```
 
 ## Library
 
