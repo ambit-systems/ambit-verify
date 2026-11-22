@@ -101,7 +101,6 @@ include = [
   "src/ambit_verify",
   "tests",
   "samples",
-  "schemas",
   "CHANGELOG.md",
   "LICENSE",
   "NOTICE",

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/ambit-systems/ambit-verify/schemas/mcp-call-v1/outcome-claims.schema.json",
+  "$id": "urn:ambit:verify:schema:mcp-call-v1:outcome-claims",
   "title": "mcp-call/1 outcome claims",
   "description": "Claims of a door-signed outcome token for one MCP tools/call. Status unknown is a valid token but never a terminal: it settles nothing and capacity stays held.",
   "type": "object",

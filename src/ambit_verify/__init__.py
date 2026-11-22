@@ -120,6 +120,7 @@ from .resource_protocol import (
     verify_resource_outcome,
     verify_terminal_resource_outcome,
 )
+from .schemas import load_schema
 from .status_evidence import CUMULATIVE_STATUS_CONTEXT, verify_cumulative_status_payload
 from .tokens import (
     MAX_VERIFICATION_CHAIN_DEPTH,
@@ -206,6 +207,7 @@ __all__ = [
     "hash_object",
     "is_terminal_outcome",
     "ledger_files",
+    "load_schema",
     "operation_descriptor_hash",
     "outcome_evidence_class",
     "outcome_joins_dispatch",

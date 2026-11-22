@@ -319,7 +319,7 @@ A `committed` outcome with `observed_by` `proxy` needs a non-null `response_hash
 
 `outcome_evidence_class` returns `receiver-signed` for the existing profiles, `proxy-observed` or `operator-attested` for `mcp-call/1`. `verify_execution_bundle` returns it as `evidence_class`, and the `execution` command prints it as `evidence_class`.
 
-JSON Schema (draft 2020-12) files are in `schemas/mcp-call-v1/`. Golden vectors with exact canonical bytes and tokens are in `tests/vectors/mcp-call-v1/`. `scripts/generate_mcp_call_vectors.py` regenerates them from fixed Ed25519 seeds.
+JSON Schema (draft 2020-12) files are in `src/ambit_verify/schemas/mcp-call-v1/` and ship in the wheel. `ambit_verify.load_schema("mcp-call-v1/dispatch-claims")` and `ambit_verify.load_schema("mcp-call-v1/outcome-claims")` return them as dicts. Golden vectors with exact canonical bytes and tokens are in `tests/vectors/mcp-call-v1/`. `scripts/generate_mcp_call_vectors.py` regenerates them from fixed Ed25519 seeds.
 
 ## Install
 

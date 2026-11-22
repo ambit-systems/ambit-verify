@@ -6,9 +6,11 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import importlib.util
 import json
 import sys
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,7 @@ import pytest
 import mini_jsonschema
 from ambit_verify import (
     dispatch_message,
+    load_schema,
     outcome_evidence_class,
     outcome_joins_dispatch,
     verify_dispatch,
@@ -35,7 +38,6 @@ from ambit_verify.resource_protocol import (
 
 REPO = Path(__file__).resolve().parent.parent
 VECTORS = REPO / "tests" / "vectors" / "mcp-call-v1"
-SCHEMAS = REPO / "schemas" / "mcp-call-v1"
 
 
 def _generator() -> Any:
@@ -61,10 +63,7 @@ def _load(path: Path) -> dict[str, Any]:
 
 
 def _schema(kind: str) -> dict[str, Any]:
-    loaded: dict[str, Any] = json.loads(
-        (SCHEMAS / f"{kind}-claims.schema.json").read_text(encoding="utf-8")
-    )
-    return loaded
+    return load_schema(f"mcp-call-v1/{kind}-claims")
 
 
 def _verify(vector: dict[str, Any]) -> dict[str, Any]:
@@ -192,3 +191,29 @@ def test_binding_requires_the_mcp_adapter() -> None:
     with pytest.raises(ValueError, match="MCP adapter"):
         resource_binding_hash(binding)
     assert len(resource_binding_hash({**binding, "adapter_id": "mcp"})) == 64
+
+
+PACKAGED_SCHEMA_SHA256 = {
+    "dispatch-claims": "743634affca8fd75bc979730b629b7cf9d4cf56d096d5c9e5ddfe0c86d4aeeb2",
+    "outcome-claims": "fe8f584b8646c92f0e4aee35b36882ad51dd71dfcf3e3f1ed7ff6dac186c1305",
+}
+
+
+@pytest.mark.parametrize("kind", sorted(PACKAGED_SCHEMA_SHA256))
+def test_packaged_schema_bytes_are_unchanged(kind: str) -> None:
+    resource = resources.files("ambit_verify.schemas").joinpath(f"mcp-call-v1/{kind}.schema.json")
+    digest = hashlib.sha256(resource.read_bytes()).hexdigest()
+    assert digest == PACKAGED_SCHEMA_SHA256[kind]
+
+
+@pytest.mark.parametrize("kind", sorted(PACKAGED_SCHEMA_SHA256))
+def test_load_schema_returns_the_packaged_schema(kind: str) -> None:
+    schema = load_schema(f"mcp-call-v1/{kind}")
+    assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert schema["$id"] == f"urn:ambit:verify:schema:mcp-call-v1:{kind}"
+
+
+@pytest.mark.parametrize("name", ["mcp-call-v1/other", "../pyproject", "dispatch-claims", ""])
+def test_load_schema_rejects_an_unknown_name(name: str) -> None:
+    with pytest.raises(ValueError, match="unknown schema"):
+        load_schema(name)
