@@ -6,6 +6,13 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Add the `mcp-call/1` resource profile: dispatch and outcome claim validation, `MCP_CALL_PROFILE`, and the `mcp` adapter requirement for its resource binding. Outcomes carry `status`, `observed_by`, `observed_at`, `response_hash`, `tool_error` and `attestation`. Status `unknown` is a valid token and never a terminal.
+- Add `outcome_evidence_class`, `is_terminal_outcome`, `outcome_joins_dispatch`, `resource_join_fields` and `verify_terminal_resource_outcome`, with the `EVIDENCE_*` constants.
+- `ExecutionBundleVerification` carries `evidence_class`, default `None`. The `execution` command prints it. Existing fields are unchanged.
+- Add JSON Schema files in `schemas/mcp-call-v1/` and golden vectors in `tests/vectors/mcp-call-v1/`.
+
 ### Changed
 
 - Require fenced version 2 foreign revocation evidence. A terminal's

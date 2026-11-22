@@ -307,6 +307,20 @@ only the bounded retained evidence under caller-supplied public trust; it does
 not establish independent custody or a separate operator. `record-egress/1`
 is a separate signed record-egress profile, not a customer-deletion outcome.
 
+## MCP call profile (`mcp-call/1`)
+
+The `mcp-call/1` profile covers one MCP `tools/call` that a proxy forwards to an unchanged MCP server. The dispatch claims are the `record-egress/1` field set with `profile` set to `mcp-call/1` and `action_path` set to `.`. The `payload_hash` is the SHA-256 of the canonical JSON `{"name", "arguments"}`. The admitted resource binding must use `adapter_id` `mcp`.
+
+The outcome claims are the 12 join fields plus `status`, `observed_by`, `observed_at`, `response_hash`, `tool_error` and `attestation`. `status` is `committed`, `not_executed` or `unknown`. `observed_by` is `proxy` or `operator`.
+
+A `committed` outcome with `observed_by` `proxy` needs a non-null `response_hash` and `tool_error`. A `not_executed` or `unknown` proxy outcome needs both to be null. A proxy outcome carries no `attestation`. An `operator` outcome needs an `attestation` with exactly `operator_id` and `reason` as non-empty strings, and it carries no `response_hash` or `tool_error`. An `operator` outcome states `committed` or `not_executed`.
+
+`unknown` is a valid signed token, but it is never a terminal. `is_terminal_outcome`, `outcome_joins_dispatch` and `verify_terminal_resource_outcome` refuse it, and `verify_execution_bundle` refuses it as a settlement. Authority keeps the capacity held.
+
+`outcome_evidence_class` returns `receiver-signed` for the existing profiles, `proxy-observed` or `operator-attested` for `mcp-call/1`. `verify_execution_bundle` returns it as `evidence_class`, and the `execution` command prints it as `evidence_class`.
+
+JSON Schema (draft 2020-12) files are in `schemas/mcp-call-v1/`. Golden vectors with exact canonical bytes and tokens are in `tests/vectors/mcp-call-v1/`. `scripts/generate_mcp_call_vectors.py` regenerates them from fixed Ed25519 seeds.
+
 ## Install
 
 ```
