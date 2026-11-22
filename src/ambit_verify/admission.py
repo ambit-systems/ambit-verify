@@ -26,6 +26,7 @@ from .models import DelegationClaims
 from .ratification_bundle import GRANT_FILE, verify_ratification_bundle
 from .resource_protocol import (
     CUSTOMER_DELETE_PROFILE,
+    MCP_CALL_PROFILE,
     counterparty_consent_hash,
     counterparty_destination_hash,
     counterparty_foreign_descriptor_hash,
@@ -350,7 +351,12 @@ def _shape_errors(claims: Mapping[str, Any]) -> list[str]:
                 (outcome_profile is None and outcome_public_key is None)
                 or (
                     outcome_profile
-                    in {"record-egress/1", "git-publication/1", CUSTOMER_DELETE_PROFILE}
+                    in {
+                        "record-egress/1",
+                        "git-publication/1",
+                        CUSTOMER_DELETE_PROFILE,
+                        MCP_CALL_PROFILE,
+                    }
                     and _digest(outcome_public_key)
                     and outcome_public_key != binding["receipt_public_key"]
                 )

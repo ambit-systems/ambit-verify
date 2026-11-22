@@ -343,6 +343,8 @@ def _credential_command(argv: Sequence[str]) -> int:
             if execution_result.foreign_dispatch_hash is not None:
                 report["foreign_dispatch_hash"] = execution_result.foreign_dispatch_hash
                 report["foreign_evidence_form"] = execution_result.foreign_evidence_form
+            if execution_result.evidence_class is not None:
+                report["evidence_class"] = execution_result.evidence_class
         else:
             trust = strict_json_loads(_read_utf8_document(args.trust))
             if not isinstance(trust, Mapping):

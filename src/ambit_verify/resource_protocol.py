@@ -21,6 +21,7 @@ from .tokens_slips import SLIP_CONTEXT_COUNTERPARTY_CONTEXT, parse_counterparty_
 RESOURCE_PROFILE = "record-egress/1"
 GIT_PUBLICATION_PROFILE = "git-publication/1"
 CUSTOMER_DELETE_PROFILE = "customer-delete/1"
+MCP_CALL_PROFILE = "mcp-call/1"
 DISPATCH_CONTEXT = b"ambit.resource.dispatch.v1."
 OUTCOME_CONTEXT = b"ambit.resource.outcome.v1."
 RECONCILIATION_CONTEXT = b"ambit.resource.reconciliation.v1."
@@ -28,6 +29,10 @@ COUNTERPARTY_PENDING_ACK_CONTEXT = b"ambit.resource.counterparty-pending-ack.v1.
 COUNTERPARTY_PENDING_ACK_PROFILE = "counterparty_pending_ack/1"
 COUNTERPARTY_CONTEXT_CONTEXT = SLIP_CONTEXT_COUNTERPARTY_CONTEXT
 COUNTERPARTY_CONTEXT_PROFILE = "counterparty_context/1"
+EVIDENCE_RECEIVER_SIGNED = "receiver-signed"
+EVIDENCE_PROXY_OBSERVED = "proxy-observed"
+EVIDENCE_OPERATOR_ATTESTED = "operator-attested"
+TERMINAL_OUTCOME_STATUSES = frozenset({"committed", "not_executed"})
 _HEX = frozenset("0123456789abcdef")
 _OPERATION_ID_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
@@ -142,6 +147,17 @@ _CUSTOMER_DELETE_TERMINAL_FIELDS = _RESOURCE_JOIN_FIELDS | frozenset(
         "reason",
     }
 )
+_MCP_CALL_TERMINAL_FIELDS = _RESOURCE_JOIN_FIELDS | frozenset(
+    {
+        "status",
+        "observed_by",
+        "observed_at",
+        "response_hash",
+        "tool_error",
+        "attestation",
+    }
+)
+_MCP_CALL_ATTESTATION_FIELDS = frozenset({"operator_id", "reason"})
 _GIT_OUTCOME_REASONS = frozenset(
     {
         "delegation_revoked",
@@ -337,7 +353,13 @@ def resource_binding_hash(binding: Mapping[str, Any]) -> str:
     if profile is None and public_key is None:
         return hash_object(value)
     if (
-        profile not in {RESOURCE_PROFILE, GIT_PUBLICATION_PROFILE, CUSTOMER_DELETE_PROFILE}
+        profile
+        not in {
+            RESOURCE_PROFILE,
+            GIT_PUBLICATION_PROFILE,
+            CUSTOMER_DELETE_PROFILE,
+            MCP_CALL_PROFILE,
+        }
         or not isinstance(public_key, str)
         or len(public_key) != 64
         or set(public_key) - _HEX
@@ -351,6 +373,8 @@ def resource_binding_hash(binding: Mapping[str, Any]) -> str:
         validate_branch_ref(value.get("git_ref"), "resource binding git_ref")
     elif profile == CUSTOMER_DELETE_PROFILE and value["adapter_id"] != "http":
         raise ValueError("customer-delete requires the HTTP adapter")
+    elif profile == MCP_CALL_PROFILE and value["adapter_id"] != "mcp":
+        raise ValueError("mcp-call requires the MCP adapter")
     return hash_object(value)
 
 
@@ -471,7 +495,7 @@ def git_publication_plan_hash(
 
 def _dispatch_claims(value: Mapping[str, Any]) -> dict[str, Any]:
     profile = value.get("profile")
-    if profile == RESOURCE_PROFILE:
+    if profile in {RESOURCE_PROFILE, MCP_CALL_PROFILE}:
         claims = _claims(
             value,
             fields=_DISPATCH_FIELDS,
@@ -479,6 +503,8 @@ def _dispatch_claims(value: Mapping[str, Any]) -> dict[str, Any]:
             profile=profile,
             optional=(_REVOCATION_IDENTITY_FIELDS, _REVOCATION_IDENTITY_WITH_BOUND_FIELDS),
         )
+        if profile == MCP_CALL_PROFILE and claims.get("action_path") != ".":
+            raise ValueError("dispatch mcp-call action_path must be '.'")
     elif profile == CUSTOMER_DELETE_PROFILE:
         claims = _claims(
             value,
@@ -983,6 +1009,44 @@ def _foreign_revocation_evidence(value: object) -> None:
     )
 
 
+def _mcp_call_outcome_claims(value: Mapping[str, Any]) -> dict[str, Any]:
+    claims = _claims(
+        value, fields=_MCP_CALL_TERMINAL_FIELDS, kind="resource outcome", profile=MCP_CALL_PROFILE
+    )
+    status = claims.get("status")
+    if status not in {"committed", "not_executed", "unknown"}:
+        raise ValueError("resource outcome status is invalid")
+    observed_by = claims.get("observed_by")
+    if observed_by not in {"proxy", "operator"}:
+        raise ValueError("resource outcome observed_by is invalid")
+    _time(claims.get("observed_at"), "resource outcome observed_at")
+    response_hash = claims.get("response_hash")
+    tool_error = claims.get("tool_error")
+    attestation = claims.get("attestation")
+    if response_hash is not None:
+        _digest(response_hash, "resource outcome response_hash")
+    if tool_error is not None and not isinstance(tool_error, bool):
+        raise ValueError("resource outcome tool_error is invalid")
+    if observed_by == "operator":
+        if status == "unknown":
+            raise ValueError("operator attestation must state a terminal status")
+        if not isinstance(attestation, Mapping) or set(attestation) != _MCP_CALL_ATTESTATION_FIELDS:
+            raise ValueError("operator outcome requires an attestation with operator_id and reason")
+        _text(attestation["operator_id"], "resource outcome attestation operator_id")
+        _text(attestation["reason"], "resource outcome attestation reason")
+        if response_hash is not None or tool_error is not None:
+            raise ValueError("operator outcome must not claim an observed response")
+        return claims
+    if attestation is not None:
+        raise ValueError("proxy outcome must not carry an attestation")
+    if status == "committed":
+        if response_hash is None or tool_error is None:
+            raise ValueError("committed proxy outcome requires response_hash and tool_error")
+    elif response_hash is not None or tool_error is not None:
+        raise ValueError("proxy outcome without an observed response must not state one")
+    return claims
+
+
 def _outcome_claims(value: Mapping[str, Any]) -> dict[str, Any]:
     profile = value.get("profile")
     if profile == RESOURCE_PROFILE:
@@ -1054,6 +1118,8 @@ def _outcome_claims(value: Mapping[str, Any]) -> dict[str, Any]:
         ):
             raise ValueError("not_executed customer-delete outcome is invalid")
         return claims
+    if profile == MCP_CALL_PROFILE:
+        return _mcp_call_outcome_claims(value)
     if profile != GIT_PUBLICATION_PROFILE:
         raise ValueError("resource outcome profile is invalid")
     claims = _claims(
@@ -1091,7 +1157,12 @@ def _outcome_claims(value: Mapping[str, Any]) -> dict[str, Any]:
 
 def _reconciliation_claims(value: Mapping[str, Any]) -> dict[str, Any]:
     profile = value.get("profile")
-    if profile not in {RESOURCE_PROFILE, GIT_PUBLICATION_PROFILE, CUSTOMER_DELETE_PROFILE}:
+    if profile not in {
+        RESOURCE_PROFILE,
+        GIT_PUBLICATION_PROFILE,
+        CUSTOMER_DELETE_PROFILE,
+        MCP_CALL_PROFILE,
+    }:
         raise ValueError("reconciliation profile is invalid")
     claims = _claims(
         value,
@@ -1203,6 +1274,120 @@ def verify_reconciliation(token: str, *, public_key: bytes | str) -> dict[str, A
     )
 
 
+def is_terminal_outcome(claims: Mapping[str, Any]) -> bool:
+    """Report whether verified outcome claims state a terminal status.
+
+    ``unknown`` is a valid outcome that settles nothing. Capacity stays held.
+
+    Args:
+        claims: Claims returned by ``verify_resource_outcome``.
+
+    Returns:
+        True when ``status`` is ``committed`` or ``not_executed``.
+    """
+    return claims.get("status") in TERMINAL_OUTCOME_STATUSES
+
+
+def verify_terminal_resource_outcome(token: str, *, public_key: bytes | str) -> dict[str, Any]:
+    """Verify one resource outcome and refuse every non-terminal status.
+
+    Args:
+        token: Compact outcome token.
+        public_key: The admitted outcome public key, as 32 bytes or 64 hex characters.
+
+    Returns:
+        Copied claims of a terminal outcome.
+
+    Raises:
+        ValueError: If the token does not verify or its status is not terminal.
+    """
+    claims = verify_resource_outcome(token, public_key=public_key)
+    if not is_terminal_outcome(claims):
+        raise ValueError("resource outcome is not terminal")
+    return claims
+
+
+def outcome_evidence_class(claims: Mapping[str, Any]) -> str:
+    """Return how a verified outcome was produced.
+
+    Existing profiles are signed by the receiver. A ``mcp-call/1`` outcome is
+    ``proxy-observed`` or ``operator-attested`` according to ``observed_by``.
+
+    Args:
+        claims: Claims returned by ``verify_resource_outcome``.
+
+    Returns:
+        One of ``EVIDENCE_RECEIVER_SIGNED``, ``EVIDENCE_PROXY_OBSERVED`` or
+        ``EVIDENCE_OPERATOR_ATTESTED``.
+
+    Raises:
+        ValueError: If a ``mcp-call/1`` outcome has an invalid ``observed_by``.
+    """
+    if claims.get("profile") != MCP_CALL_PROFILE:
+        return EVIDENCE_RECEIVER_SIGNED
+    if claims.get("observed_by") == "operator":
+        return EVIDENCE_OPERATOR_ATTESTED
+    if claims.get("observed_by") == "proxy":
+        return EVIDENCE_PROXY_OBSERVED
+    raise ValueError("resource outcome observed_by is invalid")
+
+
+def resource_join_fields(profile: object) -> tuple[str, ...]:
+    """Return the claim names an outcome must share with its dispatch, in a fixed order.
+
+    Args:
+        profile: The dispatch profile. Unknown values give the 12 common join fields.
+
+    Returns:
+        The join field names for the profile.
+    """
+    common = (
+        "version",
+        "profile",
+        "domain_id",
+        "ledger_id",
+        "enforcement_point_id",
+        "resource_id",
+        "resource_binding_hash",
+        "operation_id",
+        "request_hash",
+        "payload_hash",
+        "decision_hash",
+        "intent_hash",
+    )
+    if profile == GIT_PUBLICATION_PROFILE:
+        return (
+            *common,
+            "actor_id",
+            "plan_hash",
+            "remote",
+            "ref",
+            "expected_old_oid",
+            "new_oid",
+            "range",
+            "force",
+        )
+    if profile == CUSTOMER_DELETE_PROFILE:
+        return (*common, "customer_id")
+    return common
+
+
+def outcome_joins_dispatch(outcome: Mapping[str, Any], dispatch: Mapping[str, Any]) -> bool:
+    """Report whether a terminal outcome carries its dispatch's exact join fields.
+
+    Args:
+        outcome: Verified outcome claims.
+        dispatch: Verified dispatch claims. Its ``profile`` selects the join fields.
+
+    Returns:
+        True when the outcome is terminal and every join field is equal.
+    """
+    return is_terminal_outcome(outcome) and all(
+        outcome.get(name) == dispatch.get(name)
+        for name in resource_join_fields(dispatch.get("profile"))
+    )
+
+
 __all__ = [
     "COUNTERPARTY_CONTEXT_CONTEXT",
     "COUNTERPARTY_CONTEXT_PROFILE",
@@ -1210,10 +1395,15 @@ __all__ = [
     "COUNTERPARTY_PENDING_ACK_PROFILE",
     "CUSTOMER_DELETE_PROFILE",
     "DISPATCH_CONTEXT",
+    "EVIDENCE_OPERATOR_ATTESTED",
+    "EVIDENCE_PROXY_OBSERVED",
+    "EVIDENCE_RECEIVER_SIGNED",
     "GIT_PUBLICATION_PROFILE",
+    "MCP_CALL_PROFILE",
     "OUTCOME_CONTEXT",
     "RECONCILIATION_CONTEXT",
     "RESOURCE_PROFILE",
+    "TERMINAL_OUTCOME_STATUSES",
     "counterparty_consent_hash",
     "counterparty_destination_hash",
     "counterparty_foreign_descriptor",
@@ -1224,14 +1414,19 @@ __all__ = [
     "dispatch_message",
     "git_publication_plan_hash",
     "git_ref_is_covered",
+    "is_terminal_outcome",
+    "outcome_evidence_class",
+    "outcome_joins_dispatch",
     "outcome_message",
     "payload_bytes",
     "reconciliation_message",
     "resource_binding_hash",
+    "resource_join_fields",
     "validate_counterparty_ingress_url",
     "verify_counterparty_context",
     "verify_counterparty_pending_ack",
     "verify_dispatch",
     "verify_reconciliation",
     "verify_resource_outcome",
+    "verify_terminal_resource_outcome",
 ]

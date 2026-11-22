@@ -16,7 +16,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from .hashing import canonical_json_bytes, strict_json_loads
 from .resource_protocol import (
+    MCP_CALL_PROFILE,
     dispatch_revocation_identity,
+    is_terminal_outcome,
     verify_dispatch,
     verify_resource_outcome,
 )
@@ -330,6 +332,8 @@ def validate_terminal_start_record(
     if not isinstance(token, str):
         raise ValueError("native_start_terminal_outcome_missing")
     outcome = verify_resource_outcome(token, public_key=starts[0]["resource_public_key"])
+    if outcome.get("profile") == MCP_CALL_PROFILE and not is_terminal_outcome(outcome):
+        raise ValueError("native_start_terminal_outcome_not_terminal")
     if any(outcome.get(name) != operation.get(name) for name in ("domain_id", "operation_id")):
         raise ValueError("native_start_terminal_operation_mismatch")
     validate_terminal_start(outcome, starts)

@@ -38,16 +38,19 @@ from .head_attestation_ed25519 import Ed25519HeadVerifier
 from .native_start import validate_terminal_start
 from .resource_protocol import (
     CUSTOMER_DELETE_PROFILE,
+    MCP_CALL_PROFILE,
     counterparty_foreign_descriptor_hash,
     counterparty_operation_hash,
     git_publication_plan_hash,
     git_ref_is_covered,
+    outcome_evidence_class,
     payload_bytes,
     resource_binding_hash,
+    resource_join_fields,
     verify_counterparty_pending_ack,
     verify_dispatch,
     verify_reconciliation,
-    verify_resource_outcome,
+    verify_terminal_resource_outcome,
 )
 from .tokens_slips import parse_approval, parse_delegation
 from .verify import GENESIS_HASH
@@ -56,35 +59,7 @@ _HEX = frozenset("0123456789abcdef")
 
 
 def _resource_join_fields(profile: object) -> tuple[str, ...]:
-    common = (
-        "version",
-        "profile",
-        "domain_id",
-        "ledger_id",
-        "enforcement_point_id",
-        "resource_id",
-        "resource_binding_hash",
-        "operation_id",
-        "request_hash",
-        "payload_hash",
-        "decision_hash",
-        "intent_hash",
-    )
-    if profile == "git-publication/1":
-        return (
-            *common,
-            "actor_id",
-            "plan_hash",
-            "remote",
-            "ref",
-            "expected_old_oid",
-            "new_oid",
-            "range",
-            "force",
-        )
-    if profile == CUSTOMER_DELETE_PROFILE:
-        return (*common, "customer_id")
-    return common
+    return resource_join_fields(profile)
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +71,7 @@ class ExecutionBundleVerification:
     errors: tuple[str, ...] = ()
     foreign_dispatch_hash: str | None = None
     foreign_evidence_form: str | None = None
+    evidence_class: str | None = None
 
 
 def _digest(value: object) -> bool:
@@ -294,7 +270,11 @@ def _accounting(
     accounts = consumption.get("accounts")
     if not isinstance(accounts, list) or len(accounts) != len(expected):
         raise ValueError("operation accounting is incomplete")
-    if profile is None or (profile == CUSTOMER_DELETE_PROFILE and tool_name != "customer.delete"):
+    if (
+        profile is None
+        or profile == MCP_CALL_PROFILE
+        or (profile == CUSTOMER_DELETE_PROFILE and tool_name != "customer.delete")
+    ):
         # Generic calls retain obligations without claiming a signed effect.
         if not expected:
             return
@@ -585,6 +565,10 @@ def _action_and_payload(
         if "url" in arguments:
             raise ValueError("record-egress call must not carry an arbitrary URL")
         return dict(claims), records
+    if claims.get("profile") == MCP_CALL_PROFILE:
+        if claims.get("action_path") != ".":
+            raise ValueError("dispatch does not state the fixed mcp-call action path")
+        return dict(claims), None
     admission_evidence = (
         evidence.get("authority_admission") if isinstance(evidence, Mapping) else None
     )
@@ -1184,7 +1168,9 @@ def _replay_prefix(
             )
             if not isinstance(outcome_key, (str, bytes)):
                 raise ValueError("counterparty recovery lacks the admitted B outcome key")
-            outcome = verify_resource_outcome(record["resource_outcome"], public_key=outcome_key)
+            outcome = verify_terminal_resource_outcome(
+                record["resource_outcome"], public_key=outcome_key
+            )
             if any(
                 outcome.get(name) != dispatch_claims.get(name)
                 for name in _resource_join_fields(dispatch_claims.get("profile"))
@@ -1467,7 +1453,7 @@ def _replay_prefix(
                     or not isinstance(outcome_key, (bytes, str))
                 ):
                     raise ValueError("terminal receipt lacks its admitted independent resource key")
-                outcome = verify_resource_outcome(
+                outcome = verify_terminal_resource_outcome(
                     record["resource_outcome"], public_key=outcome_key
                 )
                 validate_terminal_start(outcome, records)
@@ -1905,7 +1891,9 @@ def verify_execution_bundle(
             and isinstance(settlement.get("resource_outcome"), str)
         ):
             raise ValueError("terminal settlement lacks a signed resource outcome")
-        outcome = verify_resource_outcome(settlement["resource_outcome"], public_key=resource_key)
+        outcome = verify_terminal_resource_outcome(
+            settlement["resource_outcome"], public_key=resource_key
+        )
         validate_terminal_start(outcome, records)
         accepted_at = outcome.get("accepted_at")
         if accepted_at is not None:
@@ -1948,6 +1936,7 @@ def verify_execution_bundle(
         checks,
         foreign_dispatch_hash=foreign_result.dispatch_hash if foreign_result else None,
         foreign_evidence_form=foreign_result.evidence_form if foreign_result else None,
+        evidence_class=outcome_evidence_class(outcome),
     )
 
 
