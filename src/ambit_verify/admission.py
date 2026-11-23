@@ -322,6 +322,13 @@ def _shape_errors(claims: Mapping[str, Any]) -> list[str]:
         and "counterparty_ingress_url" in binding
     ):
         binding_fields |= {"counterparty_ingress_url"}
+    if (
+        valid_schema_version
+        and version in {2, 3, *_COUNTERPARTY_ADMISSION_SCHEMA_VERSIONS}
+        and isinstance(binding, Mapping)
+        and "receiver_public_key" in binding
+    ):
+        binding_fields |= {"receiver_public_key"}
     if version == ADMISSION_SCHEMA_VERSION and isinstance(binding, Mapping):
         ingress = "counterparty_ingress_url" in binding
         consent = "counterparty_consent_hash" in binding

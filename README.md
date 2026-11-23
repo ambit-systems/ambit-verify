@@ -314,13 +314,19 @@ is a separate signed record-egress profile, not a customer-deletion outcome.
 
 The `mcp-call/1` profile covers one MCP `tools/call` that a proxy forwards to an unchanged MCP server. The dispatch claims are the `record-egress/1` field set with `profile` set to `mcp-call/1` and `action_path` set to `.`. The `payload_hash` is the SHA-256 of the canonical JSON `{"name", "arguments"}`. The admitted resource binding must use `adapter_id` `mcp`.
 
-The outcome claims are the 12 join fields plus `status`, `observed_by`, `observed_at`, `response_hash`, `tool_error` and `attestation`. `status` is `committed`, `not_executed` or `unknown`. `observed_by` is `proxy` or `operator`.
+The outcome claims are the 12 join fields plus `status`, `observed_by`, `observed_at`, `response_hash`, `tool_error` and `attestation`. `status` is `committed`, `not_executed` or `unknown`. `observed_by` is `proxy`, `operator` or `receiver`.
 
 A `committed` outcome with `observed_by` `proxy` needs a non-null `response_hash` and `tool_error`. A `not_executed` or `unknown` proxy outcome needs both to be null. A proxy outcome carries no `attestation`. An `operator` outcome needs an `attestation` with exactly `operator_id` and `reason` as non-empty strings, and it carries no `response_hash` or `tool_error`. An `operator` outcome states `committed` or `not_executed`.
 
+A `receiver` outcome is signed by the MCP server itself, not by the proxy. It states `committed` or `not_executed` and never `unknown`. It carries no `attestation`. A `committed` receiver outcome needs a non-null `response_hash` and `tool_error`. A `not_executed` receiver outcome needs both to be null. The `response_hash` of a receiver outcome is the SHA-256 of the canonical JSON of the MCP `result` object with `_meta` removed. `mcp_result_hash` computes it.
+
+The admitted binding may carry `receiver_public_key`, an Ed25519 key as 64 hexadecimal characters. It is valid only with `outcome_profile` `mcp-call/1`. It must differ from `outcome_public_key` and `receipt_public_key`. The binding hash covers it only when present, so a binding without it hashes as before. `verify_bound_outcome(token, binding)` verifies a `receiver` outcome with `receiver_public_key` and every other outcome with `outcome_public_key`. It refuses a `receiver` outcome when the binding has no `receiver_public_key`. A token that says `receiver` and carries the door signature fails. `verify_execution_bundle` uses this function.
+
+A proxy that forwards a dispatch to a receiver puts the dispatch token in `params._meta[DISPATCH_META_KEY]`. The receiver returns its outcome token in `result._meta[OUTCOME_META_KEY]`. Both constants come from `ambit_verify`.
+
 `unknown` is a valid signed token, but it is never a terminal. `is_terminal_outcome`, `outcome_joins_dispatch` and `verify_terminal_resource_outcome` refuse it, and `verify_execution_bundle` refuses it as a settlement. Authority keeps the capacity held.
 
-`outcome_evidence_class` returns `receiver-signed` for the existing profiles, `proxy-observed` or `operator-attested` for `mcp-call/1`. `verify_execution_bundle` returns it as `evidence_class`, and the `execution` command prints it as `evidence_class`.
+`outcome_evidence_class` returns `receiver-signed` for the existing profiles. For `mcp-call/1` it returns `receiver-signed`, `proxy-observed` or `operator-attested` according to `observed_by`. `verify_execution_bundle` returns it as `evidence_class`, and the `execution` command prints it as `evidence_class`.
 
 JSON Schema (draft 2020-12) files are in `src/ambit_verify/schemas/mcp-call-v1/` and ship in the wheel. `ambit_verify.load_schema("mcp-call-v1/dispatch-claims")` and `ambit_verify.load_schema("mcp-call-v1/outcome-claims")` return them as dicts. Golden vectors with exact canonical bytes and tokens are in `tests/vectors/mcp-call-v1/`. `scripts/generate_mcp_call_vectors.py` regenerates them from fixed Ed25519 seeds.
 

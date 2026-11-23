@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ambit:verify:schema:mcp-call-v1:outcome-claims",
   "title": "mcp-call/1 outcome claims",
-  "description": "Claims of a door-signed outcome token for one MCP tools/call. Status unknown is a valid token but never a terminal: it settles nothing and capacity stays held.",
+  "description": "Claims of an outcome token for one MCP tools/call. The door signs proxy and operator outcomes. The receiver signs receiver outcomes. Status unknown is a valid token but never a terminal: it settles nothing and capacity stays held.",
   "type": "object",
   "properties": {
     "version": {
@@ -65,7 +65,8 @@
     "observed_by": {
       "enum": [
         "proxy",
-        "operator"
+        "operator",
+        "receiver"
       ]
     },
     "observed_at": {
@@ -236,6 +237,84 @@
           "attestation": {
             "type": "object"
           },
+          "response_hash": {
+            "type": "null"
+          },
+          "tool_error": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "observed_by": {
+            "const": "receiver"
+          }
+        },
+        "required": [
+          "observed_by"
+        ]
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "enum": [
+              "committed",
+              "not_executed"
+            ]
+          },
+          "attestation": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "observed_by": {
+            "const": "receiver"
+          },
+          "status": {
+            "const": "committed"
+          }
+        },
+        "required": [
+          "observed_by",
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "response_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "tool_error": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "observed_by": {
+            "const": "receiver"
+          },
+          "status": {
+            "const": "not_executed"
+          }
+        },
+        "required": [
+          "observed_by",
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
           "response_hash": {
             "type": "null"
           },

@@ -361,6 +361,40 @@ def test_schema4_admits_only_normalized_signed_counterparty_points() -> None:
     ).valid
 
 
+def test_admission_accepts_a_receiver_key_only_for_the_mcp_call_profile() -> None:
+    signer = Ed25519PrivateKey.generate()
+    public = signer.public_key().public_bytes_raw().hex()
+    base = _admission_claims(origin_hash="a" * 64)
+    base["schema_version"] = 4
+    base["trusted_counterparty_points"] = {}
+    mcp = {
+        **base["resource_binding"],
+        "adapter_id": "mcp",
+        "outcome_profile": "mcp-call/1",
+        "outcome_public_key": "88" * 32,
+        "receiver_public_key": "99" * 32,
+    }
+
+    def verdict(binding: dict[str, Any]) -> bool:
+        token = _slip(
+            {**base, "resource_binding": binding},
+            signer,
+            trust_root_id="admission",
+            context=ADMISSION_CONTEXT,
+        )
+        return verify_authority_admission(
+            token,
+            admission_trust_roots={"admission": {"scheme": "ed25519", "public_key": public}},
+            expected_domain="customer-domain",
+            expected_ledger_id="ledger",
+            at=NOW,
+        ).valid
+
+    assert verdict(mcp)
+    assert not verdict({**mcp, "outcome_profile": "record-egress/1", "adapter_id": "http"})
+    assert not verdict({**mcp, "receiver_public_key": mcp["outcome_public_key"]})
+
+
 def test_schema5_customer_delete_binds_the_projected_foreign_policy() -> None:
     claims, _foreign_dispatch_signer, _point_id = _schema5_customer_delete_admission()
     admission_signer = Ed25519PrivateKey.generate()

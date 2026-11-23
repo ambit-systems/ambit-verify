@@ -47,10 +47,10 @@ from .resource_protocol import (
     payload_bytes,
     resource_binding_hash,
     resource_join_fields,
+    verify_bound_outcome,
     verify_counterparty_pending_ack,
     verify_dispatch,
     verify_reconciliation,
-    verify_terminal_resource_outcome,
 )
 from .tokens_slips import parse_approval, parse_delegation
 from .verify import GENESIS_HASH
@@ -1166,11 +1166,9 @@ def _replay_prefix(
             outcome_key = (
                 binding.get("outcome_public_key") if isinstance(binding, Mapping) else None
             )
-            if not isinstance(outcome_key, (str, bytes)):
+            if not isinstance(binding, Mapping) or not isinstance(outcome_key, (str, bytes)):
                 raise ValueError("counterparty recovery lacks the admitted B outcome key")
-            outcome = verify_terminal_resource_outcome(
-                record["resource_outcome"], public_key=outcome_key
-            )
+            outcome = verify_bound_outcome(record["resource_outcome"], binding, terminal=True)
             if any(
                 outcome.get(name) != dispatch_claims.get(name)
                 for name in _resource_join_fields(dispatch_claims.get("profile"))
@@ -1453,9 +1451,7 @@ def _replay_prefix(
                     or not isinstance(outcome_key, (bytes, str))
                 ):
                     raise ValueError("terminal receipt lacks its admitted independent resource key")
-                outcome = verify_terminal_resource_outcome(
-                    record["resource_outcome"], public_key=outcome_key
-                )
+                outcome = verify_bound_outcome(record["resource_outcome"], binding, terminal=True)
                 validate_terminal_start(outcome, records)
                 dispatch_claims = fence.get("dispatch_claims")
                 if not isinstance(dispatch_claims, Mapping) or any(
@@ -1891,9 +1887,7 @@ def verify_execution_bundle(
             and isinstance(settlement.get("resource_outcome"), str)
         ):
             raise ValueError("terminal settlement lacks a signed resource outcome")
-        outcome = verify_terminal_resource_outcome(
-            settlement["resource_outcome"], public_key=resource_key
-        )
+        outcome = verify_bound_outcome(settlement["resource_outcome"], binding, terminal=True)
         validate_terminal_start(outcome, records)
         accepted_at = outcome.get("accepted_at")
         if accepted_at is not None:

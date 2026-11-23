@@ -8,6 +8,11 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Accept `observed_by` `receiver` in `mcp-call/1` outcomes. A receiver outcome states `committed` or `not_executed`, never `unknown`, and carries no attestation. `outcome_evidence_class` returns `receiver-signed` for it. Its `response_hash` is the SHA-256 of the canonical JSON of the MCP `result` without `_meta`. Add `mcp_result_hash`. The outcome JSON Schema accepts `receiver`.
+- Add the optional binding field `receiver_public_key`, valid only with `mcp-call/1`. The binding hash covers it only when present, so existing binding hashes do not change. Admission validation accepts it.
+- Add `verify_bound_outcome(token, binding, *, terminal=False)`. It verifies a `receiver` outcome with `receiver_public_key` and every other outcome with `outcome_public_key`. `verify_execution_bundle` now verifies resource outcomes with it.
+- Add `DISPATCH_META_KEY` and `OUTCOME_META_KEY`, the MCP `_meta` keys that carry the dispatch token to a receiver and the outcome token back.
+- Add vectors for receiver outcomes and for the binding hash with and without a receiver key.
 - Add `--report {text,json}` to `ambit-verify`. The default `text` output and exit codes are unchanged. `json` prints one object with a result per claim: `record_hashes`, `chain`, `head_attestation`, `witness`, `checkpoint` and `capacity`.
 - Add the `capacity` claim. It recomputes committed, held and released amounts per window from the ledger and fails on a repeated reservation id, a changing ceiling, an amount above the ceiling, a second settlement or a settlement without a decision. It is `not_checked` for a ledger without cumulative account records. The JSON claim carries an `accounts` list.
 - Add `--admission-roots` and `--quantity-policy`, used together. They add a lifecycle replay that checks the capacity bound and quantities against signed credentials. Add `recompute_capacity`, `CapacityResult` and `CapacityAccount`.

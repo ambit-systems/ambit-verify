@@ -1,0 +1,22 @@
+{
+  "binding_with_receiver": {
+    "adapter_id": "mcp",
+    "downstream_path": "/v1/tools/call",
+    "downstream_url": "http://127.0.0.1:9000",
+    "outcome_profile": "mcp-call/1",
+    "outcome_public_key": "e7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0",
+    "receipt_public_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "receiver_public_key": "adc14011f82d1c56d956aa4f9d73d8858361a606048525e0d08c638dc75dd8c7"
+  },
+  "binding_without_receiver": {
+    "adapter_id": "mcp",
+    "downstream_path": "/v1/tools/call",
+    "downstream_url": "http://127.0.0.1:9000",
+    "outcome_profile": "mcp-call/1",
+    "outcome_public_key": "e7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0",
+    "receipt_public_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "description": "A binding without receiver_public_key hashes as it always did. The key, when present, joins the hashed fields.",
+  "hash_with_receiver": "a2b68cd9ab7478892657c6aa45adab1197762c4c91a9ff16cd33c952c7a8eeaf",
+  "hash_without_receiver": "83d0bc997bfa4485fc65e1a50ff132f5d8d0cba46d67167255276f55bf2b4e64"
+}

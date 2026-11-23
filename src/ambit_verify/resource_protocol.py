@@ -29,6 +29,8 @@ COUNTERPARTY_PENDING_ACK_CONTEXT = b"ambit.resource.counterparty-pending-ack.v1.
 COUNTERPARTY_PENDING_ACK_PROFILE = "counterparty_pending_ack/1"
 COUNTERPARTY_CONTEXT_CONTEXT = SLIP_CONTEXT_COUNTERPARTY_CONTEXT
 COUNTERPARTY_CONTEXT_PROFILE = "counterparty_context/1"
+DISPATCH_META_KEY = "authority.dispatch"
+OUTCOME_META_KEY = "authority.outcome"
 EVIDENCE_RECEIVER_SIGNED = "receiver-signed"
 EVIDENCE_PROXY_OBSERVED = "proxy-observed"
 EVIDENCE_OPERATOR_ATTESTED = "operator-attested"
@@ -179,6 +181,7 @@ _BINDING_FIELDS = frozenset(
         "outcome_public_key",
     }
 )
+_RECEIVER_BINDING_FIELD = frozenset({"receiver_public_key"})
 _GIT_BINDING_FIELDS = _BINDING_FIELDS | frozenset({"git_remote", "git_ref"})
 _COUNTERPARTY_INGRESS_BINDING_FIELDS = frozenset({"counterparty_ingress_url"})
 _COUNTERPARTY_CONSENT_BINDING_FIELDS = frozenset({"counterparty_consent_hash"})
@@ -335,6 +338,8 @@ def resource_binding_hash(binding: Mapping[str, Any]) -> str:
         expected_fields |= _COUNTERPARTY_CONSENT_BINDING_FIELDS
     if "foreign_revocation_policy_hash" in value:
         expected_fields |= _FOREIGN_REVOCATION_POLICY_HASH_FIELD
+    if "receiver_public_key" in value:
+        expected_fields |= _RECEIVER_BINDING_FIELD
     if set(value) != expected_fields:
         raise ValueError("resource binding fields are invalid")
     for name in ("adapter_id", "downstream_url", "downstream_path"):
@@ -375,6 +380,16 @@ def resource_binding_hash(binding: Mapping[str, Any]) -> str:
         raise ValueError("customer-delete requires the HTTP adapter")
     elif profile == MCP_CALL_PROFILE and value["adapter_id"] != "mcp":
         raise ValueError("mcp-call requires the MCP adapter")
+    if "receiver_public_key" in value:
+        receiver_key = value["receiver_public_key"]
+        if (
+            profile != MCP_CALL_PROFILE
+            or not isinstance(receiver_key, str)
+            or len(receiver_key) != 64
+            or set(receiver_key) - _HEX
+            or receiver_key in {public_key, value["receipt_public_key"]}
+        ):
+            raise ValueError("resource binding receiver_public_key is invalid")
     return hash_object(value)
 
 
@@ -1017,7 +1032,7 @@ def _mcp_call_outcome_claims(value: Mapping[str, Any]) -> dict[str, Any]:
     if status not in {"committed", "not_executed", "unknown"}:
         raise ValueError("resource outcome status is invalid")
     observed_by = claims.get("observed_by")
-    if observed_by not in {"proxy", "operator"}:
+    if observed_by not in {"proxy", "operator", "receiver"}:
         raise ValueError("resource outcome observed_by is invalid")
     _time(claims.get("observed_at"), "resource outcome observed_at")
     response_hash = claims.get("response_hash")
@@ -1037,13 +1052,17 @@ def _mcp_call_outcome_claims(value: Mapping[str, Any]) -> dict[str, Any]:
         if response_hash is not None or tool_error is not None:
             raise ValueError("operator outcome must not claim an observed response")
         return claims
+    if observed_by == "receiver" and status == "unknown":
+        raise ValueError("receiver outcome must state a terminal status")
     if attestation is not None:
-        raise ValueError("proxy outcome must not carry an attestation")
+        raise ValueError(f"{observed_by} outcome must not carry an attestation")
     if status == "committed":
         if response_hash is None or tool_error is None:
-            raise ValueError("committed proxy outcome requires response_hash and tool_error")
+            raise ValueError(
+                f"committed {observed_by} outcome requires response_hash and tool_error"
+            )
     elif response_hash is not None or tool_error is not None:
-        raise ValueError("proxy outcome without an observed response must not state one")
+        raise ValueError(f"{observed_by} outcome without an observed response must not state one")
     return claims
 
 
@@ -1311,7 +1330,8 @@ def outcome_evidence_class(claims: Mapping[str, Any]) -> str:
     """Return how a verified outcome was produced.
 
     Existing profiles are signed by the receiver. A ``mcp-call/1`` outcome is
-    ``proxy-observed`` or ``operator-attested`` according to ``observed_by``.
+    ``receiver-signed``, ``proxy-observed`` or ``operator-attested`` according to
+    ``observed_by``.
 
     Args:
         claims: Claims returned by ``verify_resource_outcome``.
@@ -1325,11 +1345,89 @@ def outcome_evidence_class(claims: Mapping[str, Any]) -> str:
     """
     if claims.get("profile") != MCP_CALL_PROFILE:
         return EVIDENCE_RECEIVER_SIGNED
-    if claims.get("observed_by") == "operator":
+    observed_by = claims.get("observed_by")
+    if observed_by == "operator":
         return EVIDENCE_OPERATOR_ATTESTED
-    if claims.get("observed_by") == "proxy":
+    if observed_by == "proxy":
         return EVIDENCE_PROXY_OBSERVED
+    if observed_by == "receiver":
+        return EVIDENCE_RECEIVER_SIGNED
     raise ValueError("resource outcome observed_by is invalid")
+
+
+def mcp_result_hash(result: Mapping[str, Any]) -> str:
+    """Return the ``response_hash`` of a receiver outcome.
+
+    The hash is the SHA-256 of the canonical JSON of the MCP ``result`` object with
+    its top-level ``_meta`` member removed. The outcome token travels in ``_meta``,
+    so the hash cannot cover it.
+
+    Args:
+        result: The ``result`` object of an MCP ``tools/call`` response.
+
+    Returns:
+        The lowercase hexadecimal digest.
+
+    Raises:
+        ValueError: If ``result`` is not canonical JSON.
+    """
+    value = _canonical_object(result, name="MCP result")
+    value.pop("_meta", None)
+    return hash_object(value)
+
+
+def verify_bound_outcome(
+    token: str, binding: Mapping[str, Any], *, terminal: bool = False
+) -> dict[str, Any]:
+    """Verify an outcome token against the key its admitted binding assigns to its signer.
+
+    A ``mcp-call/1`` outcome whose claims state ``observed_by`` ``receiver`` verifies
+    with the binding's ``receiver_public_key``. Every other outcome verifies with
+    ``outcome_public_key``. The claims select the key and the signature then proves
+    the claim: a token that says ``receiver`` but carries the door signature fails.
+
+    Args:
+        token: Compact outcome token.
+        binding: The admitted resource binding.
+        terminal: When true, refuse a non-terminal status.
+
+    Returns:
+        Copied claims of the verified outcome.
+
+    Raises:
+        ValueError: If the binding lacks the needed key, the token is malformed or
+            the signature does not verify.
+    """
+    if not isinstance(binding, Mapping):
+        raise ValueError("resource binding is not an object")
+    key_name = "outcome_public_key"
+    if _declared_receiver(token):
+        key_name = "receiver_public_key"
+    key = binding.get(key_name)
+    if not isinstance(key, (str, bytes)):
+        raise ValueError(f"resource binding lacks {key_name}")
+    verify = verify_terminal_resource_outcome if terminal else verify_resource_outcome
+    return verify(token, public_key=key)
+
+
+def _declared_receiver(token: object) -> bool:
+    """Report whether an unverified token states ``observed_by`` ``receiver``.
+
+    The answer only selects a key. The signature check that follows decides trust.
+    """
+    if not isinstance(token, str) or token.count(".") != 1:
+        return False
+    try:
+        decoded = strict_json_loads(
+            _b64url_decode(token.split(".")[0], name="resource token payload").decode("utf-8")
+        )
+    except UnicodeDecodeError, TypeError, ValueError, OverflowError:
+        return False
+    return (
+        isinstance(decoded, Mapping)
+        and decoded.get("profile") == MCP_CALL_PROFILE
+        and decoded.get("observed_by") == "receiver"
+    )
 
 
 def resource_join_fields(profile: object) -> tuple[str, ...]:
@@ -1395,12 +1493,14 @@ __all__ = [
     "COUNTERPARTY_PENDING_ACK_PROFILE",
     "CUSTOMER_DELETE_PROFILE",
     "DISPATCH_CONTEXT",
+    "DISPATCH_META_KEY",
     "EVIDENCE_OPERATOR_ATTESTED",
     "EVIDENCE_PROXY_OBSERVED",
     "EVIDENCE_RECEIVER_SIGNED",
     "GIT_PUBLICATION_PROFILE",
     "MCP_CALL_PROFILE",
     "OUTCOME_CONTEXT",
+    "OUTCOME_META_KEY",
     "RECONCILIATION_CONTEXT",
     "RESOURCE_PROFILE",
     "TERMINAL_OUTCOME_STATUSES",
@@ -1415,6 +1515,7 @@ __all__ = [
     "git_publication_plan_hash",
     "git_ref_is_covered",
     "is_terminal_outcome",
+    "mcp_result_hash",
     "outcome_evidence_class",
     "outcome_joins_dispatch",
     "outcome_message",
@@ -1423,6 +1524,7 @@ __all__ = [
     "resource_binding_hash",
     "resource_join_fields",
     "validate_counterparty_ingress_url",
+    "verify_bound_outcome",
     "verify_counterparty_context",
     "verify_counterparty_pending_ack",
     "verify_dispatch",

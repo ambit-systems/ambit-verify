@@ -18,10 +18,14 @@ import pytest
 
 import mini_jsonschema
 from ambit_verify import (
+    DISPATCH_META_KEY,
+    OUTCOME_META_KEY,
     dispatch_message,
     load_schema,
+    mcp_result_hash,
     outcome_evidence_class,
     outcome_joins_dispatch,
+    verify_bound_outcome,
     verify_dispatch,
     verify_resource_outcome,
 )
@@ -80,8 +84,8 @@ def test_vector_files_match_the_generator_byte_for_byte() -> None:
 
 
 def test_vector_set_covers_the_required_cases() -> None:
-    assert len(VALID_OUTCOMES) == 5
-    assert len(INVALID) >= 4
+    assert len(VALID_OUTCOMES) == 7
+    assert len(INVALID) >= 7
 
 
 @pytest.mark.parametrize("path", [p for p in FILES if not p.name.startswith("invalid-")])
@@ -113,6 +117,8 @@ def test_invalid_vector_is_rejected_though_correctly_signed(path: Path) -> None:
 @pytest.mark.parametrize("path", FILES)
 def test_schema_and_verifier_agree_on_every_vector(path: Path) -> None:
     vector = _load(path)
+    if vector.get("fails") == "signature":
+        pytest.skip("claims are schema-valid; only the signature check refuses this vector")
     schema = _schema(vector["kind"])
     assert mini_jsonschema.is_valid(vector["claims"], schema) is vector["valid"]
 
@@ -141,6 +147,8 @@ def test_unknown_outcome_never_joins_its_dispatch() -> None:
         ("outcome-not-executed-proxy", EVIDENCE_PROXY_OBSERVED),
         ("outcome-committed-operator", EVIDENCE_OPERATOR_ATTESTED),
         ("outcome-not-executed-operator", EVIDENCE_OPERATOR_ATTESTED),
+        ("outcome-committed-receiver", EVIDENCE_RECEIVER_SIGNED),
+        ("outcome-not-executed-receiver", EVIDENCE_RECEIVER_SIGNED),
     ],
 )
 def test_evidence_class_follows_observed_by(name: str, expected: str) -> None:
@@ -193,9 +201,139 @@ def test_binding_requires_the_mcp_adapter() -> None:
     assert len(resource_binding_hash({**binding, "adapter_id": "mcp"})) == 64
 
 
+def _binding(*, receiver: bool = False) -> dict[str, Any]:
+    binding = GENERATOR.binding()
+    if receiver:
+        binding["receiver_public_key"] = GENERATOR._public_key_hex(GENERATOR.RECEIVER_SEED)
+    return binding
+
+
+def test_receiver_outcome_joins_its_dispatch_and_is_terminal() -> None:
+    dispatch = _verify(_load(VECTORS / "dispatch.json"))
+    committed = _verify(_load(VECTORS / "outcome-committed-receiver.json"))
+    not_executed = _verify(_load(VECTORS / "outcome-not-executed-receiver.json"))
+    assert outcome_joins_dispatch(committed, dispatch)
+    assert outcome_joins_dispatch(not_executed, dispatch)
+
+
+def test_receiver_committed_response_hash_is_the_result_hash() -> None:
+    claims = _verify(_load(VECTORS / "outcome-committed-receiver.json"))
+    assert claims["response_hash"] == mcp_result_hash(GENERATOR._RESULT)
+
+
+def test_result_hash_ignores_meta_and_covers_the_rest() -> None:
+    result = {"content": [{"type": "text", "text": "x"}], "isError": False}
+    assert mcp_result_hash({**result, "_meta": {OUTCOME_META_KEY: "token"}}) == mcp_result_hash(
+        result
+    )
+    assert mcp_result_hash({**result, "isError": True}) != mcp_result_hash(result)
+    with pytest.raises(ValueError):
+        mcp_result_hash({"x": float("nan")})
+
+
+def test_meta_keys_have_no_reserved_prefix_and_differ() -> None:
+    for key in (DISPATCH_META_KEY, OUTCOME_META_KEY):
+        assert "/" not in key
+        assert "modelcontextprotocol" not in key
+        assert not key.startswith("mcp")
+    assert DISPATCH_META_KEY != OUTCOME_META_KEY
+
+
+def test_bound_outcome_uses_the_receiver_key_for_a_receiver_outcome() -> None:
+    vector = _load(VECTORS / "outcome-committed-receiver.json")
+    claims = verify_bound_outcome(vector["token"], _binding(receiver=True), terminal=True)
+    assert claims == vector["claims"]
+
+
+def test_bound_outcome_uses_the_outcome_key_for_proxy_and_operator_outcomes() -> None:
+    for name in ("outcome-committed-proxy", "outcome-committed-operator"):
+        vector = _load(VECTORS / f"{name}.json")
+        assert verify_bound_outcome(vector["token"], _binding()) == vector["claims"]
+        assert verify_bound_outcome(vector["token"], _binding(receiver=True)) == vector["claims"]
+
+
+def test_bound_outcome_refuses_a_receiver_outcome_without_a_receiver_key() -> None:
+    vector = _load(VECTORS / "outcome-committed-receiver.json")
+    with pytest.raises(ValueError, match="receiver_public_key"):
+        verify_bound_outcome(vector["token"], _binding())
+
+
+def test_bound_outcome_refuses_a_receiver_claim_signed_by_the_door_key() -> None:
+    vector = _load(VECTORS / "invalid-receiver-wrong-key.json")
+    with pytest.raises(ValueError, match="does not verify"):
+        verify_bound_outcome(vector["token"], _binding(receiver=True))
+
+
+def test_bound_outcome_refuses_a_proxy_claim_signed_by_the_receiver_key() -> None:
+    receiver = _load(VECTORS / "outcome-committed-receiver.json")
+    claims = {**receiver["claims"], "observed_by": "proxy"}
+    forged = GENERATOR._vector(
+        claims, kind="outcome", valid=False, description="x", signer=GENERATOR.RECEIVER_SEED
+    )
+    with pytest.raises(ValueError, match="does not verify"):
+        verify_bound_outcome(forged["token"], _binding(receiver=True))
+
+
+def test_bound_outcome_terminal_flag_refuses_unknown() -> None:
+    vector = _load(VECTORS / "outcome-unknown-proxy.json")
+    assert verify_bound_outcome(vector["token"], _binding())["status"] == "unknown"
+    with pytest.raises(ValueError, match="not terminal"):
+        verify_bound_outcome(vector["token"], _binding(), terminal=True)
+
+
+def test_bound_outcome_refuses_a_malformed_token_and_binding() -> None:
+    with pytest.raises(ValueError):
+        verify_bound_outcome("nope", _binding())
+    with pytest.raises(ValueError):
+        verify_bound_outcome("a.b", _binding())
+
+
+def test_old_binding_hashes_as_before_and_the_receiver_key_joins_the_hash() -> None:
+    vector = json.loads(
+        (REPO / "tests" / "vectors" / "mcp-call-v1-binding" / "binding-hashes.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    dispatch = _load(VECTORS / "dispatch.json")["claims"]
+    assert (
+        resource_binding_hash(vector["binding_without_receiver"]) == vector["hash_without_receiver"]
+    )
+    assert vector["hash_without_receiver"] == dispatch["resource_binding_hash"]
+    assert vector["hash_without_receiver"] == (
+        "83d0bc997bfa4485fc65e1a50ff132f5d8d0cba46d67167255276f55bf2b4e64"
+    )
+    assert resource_binding_hash(vector["binding_with_receiver"]) == vector["hash_with_receiver"]
+    assert vector["hash_with_receiver"] != vector["hash_without_receiver"]
+    assert vector == GENERATOR.binding_hash_vector()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"receiver_public_key": "c" * 64},
+        {"receiver_public_key": "b" * 64},
+        {"receiver_public_key": "zz"},
+        {"receiver_public_key": 5},
+        {"outcome_profile": "record-egress/1", "adapter_id": "http"},
+    ],
+)
+def test_receiver_key_in_a_binding_is_validated(change: dict[str, Any]) -> None:
+    binding = {**_binding(), "outcome_public_key": "c" * 64, **change}
+    if "receiver_public_key" not in change:
+        binding["receiver_public_key"] = "d" * 64
+    with pytest.raises(ValueError):
+        resource_binding_hash(binding)
+
+
+def test_receiver_key_must_differ_from_the_outcome_key() -> None:
+    binding = _binding()
+    with pytest.raises(ValueError, match="receiver_public_key"):
+        resource_binding_hash({**binding, "receiver_public_key": binding["outcome_public_key"]})
+
+
 PACKAGED_SCHEMA_SHA256 = {
     "dispatch-claims": "743634affca8fd75bc979730b629b7cf9d4cf56d096d5c9e5ddfe0c86d4aeeb2",
-    "outcome-claims": "fe8f584b8646c92f0e4aee35b36882ad51dd71dfcf3e3f1ed7ff6dac186c1305",
+    "outcome-claims": "d7bd4be6f9202c98b541db24c499f6c3ccef0199b84d8c98665dbd84e49601df",
 }
 
 
