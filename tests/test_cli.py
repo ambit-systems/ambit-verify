@@ -348,9 +348,9 @@ def test_combined_checks_share_one_ledger_snapshot(
     original_walk = cli_module._walk_ledger
     swapped = False
 
-    def swapping_walk(path: Path, want_seq: int = 0) -> Any:
+    def swapping_walk(path: Path, want_seq: int = 0, record_visitor: Any = None) -> Any:
         nonlocal swapped
-        chain = original_walk(path, want_seq)
+        chain = original_walk(path, want_seq, record_visitor)
         if not swapped and path == authority_path.resolve():
             swapped = True
             authority_path.write_bytes(authority_at_one)

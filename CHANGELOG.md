@@ -8,7 +8,9 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Add `--report {text,json}` to `ambit-verify`. The default `text` output and exit codes are unchanged. `json` prints one object with a result per claim: `record_hashes`, `chain`, `head_attestation`, `witness` and `checkpoint`.
+- Add `--report {text,json}` to `ambit-verify`. The default `text` output and exit codes are unchanged. `json` prints one object with a result per claim: `record_hashes`, `chain`, `head_attestation`, `witness`, `checkpoint` and `capacity`.
+- Add the `capacity` claim. It recomputes committed, held and released amounts per window from the ledger and fails on a repeated reservation id, a changing ceiling, an amount above the ceiling, a second settlement or a settlement without a decision. It is `not_checked` for a ledger without cumulative account records. The JSON claim carries an `accounts` list.
+- Add `--admission-roots` and `--quantity-policy`, used together. They add a lifecycle replay that checks the capacity bound and quantities against signed credentials. Add `recompute_capacity`, `CapacityResult` and `CapacityAccount`.
 - Add the `mcp-call/1` resource profile: dispatch and outcome claim validation, `MCP_CALL_PROFILE`, and the `mcp` adapter requirement for its resource binding. Outcomes carry `status`, `observed_by`, `observed_at`, `response_hash`, `tool_error` and `attestation`. Status `unknown` is a valid token and never a terminal.
 - Add `outcome_evidence_class`, `is_terminal_outcome`, `outcome_joins_dispatch`, `resource_join_fields` and `verify_terminal_resource_outcome`, with the `EVIDENCE_*` constants.
 - `ExecutionBundleVerification` carries `evidence_class`, default `None`. The `execution` command prints it. Existing fields are unchanged.

@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, NamedTuple
 
-CLAIMS = ("record_hashes", "chain", "head_attestation", "witness", "checkpoint")
+CLAIMS = ("record_hashes", "chain", "head_attestation", "witness", "checkpoint", "capacity")
 
 PASS = "pass"
 FAIL = "fail"
@@ -21,10 +21,12 @@ class ClaimOutcome(NamedTuple):
     Attributes:
         result: ``"pass"``, ``"fail"`` or ``"not_checked"``.
         detail: The failure reason, or the reason the claim did not run. None otherwise.
+        accounts: Totals per window. Only the ``capacity`` claim carries them.
     """
 
     result: str
     detail: str | None = None
+    accounts: tuple[Mapping[str, Any], ...] | None = None
 
 
 def build_report(ledger: str, outcomes: Mapping[str, ClaimOutcome]) -> dict[str, Any]:
@@ -42,6 +44,9 @@ def build_report(ledger: str, outcomes: Mapping[str, ClaimOutcome]) -> dict[str,
     claims = []
     for name in CLAIMS:
         outcome = outcomes.get(name, ClaimOutcome(NOT_CHECKED))
-        claims.append({"claim": name, "result": outcome.result, "detail": outcome.detail})
+        entry: dict[str, Any] = {"claim": name, "result": outcome.result, "detail": outcome.detail}
+        if name == "capacity" and outcome.accounts is not None:
+            entry["accounts"] = [dict(account) for account in outcome.accounts]
+        claims.append(entry)
     failed = any(claim["result"] == FAIL for claim in claims)
     return {"ledger": ledger, "result": FAIL if failed else PASS, "claims": claims}

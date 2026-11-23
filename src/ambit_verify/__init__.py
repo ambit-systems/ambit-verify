@@ -254,7 +254,15 @@ __all__ = [
     "verify_witnessed_head",
 ]
 
+from .capacity import CapacityAccount, CapacityResult, recompute_capacity
 from .lifecycle import replay_execution_prefix, verify_execution_prefix
 from .lifecycle_models import ExecutionPrefixVerification
 
-__all__ += ["ExecutionPrefixVerification", "replay_execution_prefix", "verify_execution_prefix"]
+__all__ += [
+    "CapacityAccount",
+    "CapacityResult",
+    "ExecutionPrefixVerification",
+    "recompute_capacity",
+    "replay_execution_prefix",
+    "verify_execution_prefix",
+]

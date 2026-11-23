@@ -37,12 +37,15 @@ nothing and ships no signer: the Ed25519 verifiers hold public keys only.
 | Head attestation | `--public-key`, optional `--attestation` | An Ed25519 signature by the named key covers the head (`max_seq`, `head_record_hash`), the ledger is exactly at that head, and the record at that `seq` hashes to the attested value. No record was appended, removed, or replaced after the attestation. |
 | Witness | `--witness`, `--witnessed-ledger-id`, `--witness-public-key` | One authenticated witness-ledger snapshot carries a valid `head_witness` record for the named ledger, and the ledger is exactly at its highest non-equivocating witnessed head. Conflicting signed heads at the same highest sequence fail. A rollback below an independently witnessed head fails, even when the ledger's own attestation was rolled back with it. |
 | Checkpoint | `--checkpoint`, `--witness-public-key`, `--countersign-public-key`, optional `--witness-trust-root-id`, optional `--public-key` | The checkpoint names one ledger identity and one head, its witness record hashes and verifies, its countersignature verifies under the holder's key, and the ledger still carries the checkpointed record at the checkpointed `seq`. Appends after the checkpoint pass. Truncation below it, rollback at it, and differing authority/witness ledger identities fail. With `--public-key`, the writer's attestation inside the checkpoint is also signature-checked, and the head-attestation check above runs as well. |
+| Capacity | the ledger; optional `--admission-roots` with `--quantity-policy` (and `--public-key`) | For a ledger with cumulative account records: no reservation id repeats, no ceiling changes inside a window, committed plus held never exceeds the ceiling, and every operation settles at most once and only after an authorized decision. The report gives ceiling, committed, held and released per window as integer strings. Without the two extra flags the ceiling and amounts are as the ledger states them. With them, a lifecycle replay checks them against the signed credentials and its totals must equal the recomputed totals. `not_checked` when the ledger carries no cumulative account records. |
 
 ## What a pass does not prove
 
 - That any record is true. A ledger records what a writer wrote. The verifier proves the bytes are unchanged; it does not judge their content.
 - That the ledger is complete, unless a head check runs. Without `--public-key`, `--witness`, or `--checkpoint`, a ledger with its tail removed still passes. Bare-chain verification pins only the genesis.
 - Anything about the key. The verifier trusts the public key you pass. Obtain it from the party that signs, over a channel you trust.
+- That the capacity bound is the signed bound. Without `--admission-roots` and `--quantity-policy`, the capacity check uses the ceiling and amounts as the ledger states them. It does not check them against signed credentials.
+- Partial settlement. The ledger carries none. A settlement commits or releases every reservation of its operation in full.
 - That the signer was honest at signing time. A head attestation proves the key holder saw this head. It does not prove the key holder is independent of the writer. Use a witness or a checkpoint for that.
 
 ## Verify receipt links
@@ -348,8 +351,11 @@ ambit-verify LEDGER
   [--attestation PATH] [--public-key HEX] [--trust-root-id ID]
   [--witness PATH --witnessed-ledger-id ID --witness-public-key HEX [--witness-trust-root-id ID]]
   [--checkpoint PATH --witness-public-key HEX --countersign-public-key HEX [--witness-trust-root-id ID]]
+  [--admission-roots PATH --quantity-policy PATH]
   [--report {text,json}]
 ```
+
+`--admission-roots` (JSON, trust roots by adapter) and `--quantity-policy` (JSON, the generic quantity policy) are used together. They add the replay cross-check to the capacity claim. The replay also needs `--public-key`, which it uses as the enforcement point key.
 
 Verify the chain:
 
@@ -410,18 +416,18 @@ Stdout carries exactly one line.
 | 1 | `FAIL: <reason>` | A check failed. Witness and checkpoint reasons are prefixed `witness:` and `checkpoint:`. |
 | 2 | nothing (message on stderr) | Usage error (bad flag combination, a key that is not 32 hex bytes, or an empty id), or an I/O error. Usage errors are reported before any check runs. |
 
-Order of checks: chain, head attestation, witness, checkpoint. The first
+Order of checks: chain, head attestation, witness, checkpoint, capacity. A capacity failure is prefixed `capacity:`. The first
 failure is reported.
 All requested checks in one command use the same parsed ledger snapshot.
 
 ### Per-claim report
 
-Add `--report json` to print one JSON object with a result for each claim, in place of the `PASS`/`FAIL` line. The claims are `record_hashes`, `chain`, `head_attestation`, `witness` and `checkpoint`. A claim is `pass`, `fail` or `not_checked`. A claim is `not_checked` when its inputs were not supplied, or when an earlier claim failed first. `detail` holds the failure reason, or the reason a claim did not run, and is `null` otherwise. The top-level `result` is `pass` only when no claim failed. Exit codes are the same as in text mode.
+Add `--report json` to print one JSON object with a result for each claim, in place of the `PASS`/`FAIL` line. The claims are `record_hashes`, `chain`, `head_attestation`, `witness`, `checkpoint` and `capacity`. The `capacity` claim also carries an `accounts` list with one entry per window. A claim is `pass`, `fail` or `not_checked`. A claim is `not_checked` when its inputs were not supplied, or when an earlier claim failed first. `detail` holds the failure reason, or the reason a claim did not run, and is `null` otherwise. The top-level `result` is `pass` only when no claim failed. Exit codes are the same as in text mode.
 
 ```
 $ ambit-verify samples/five-receipts/evidence.jsonl --report json \
     --public-key "$(cat samples/five-receipts/evidence.jsonl.attest-public-key)"
-{"ledger": "samples/five-receipts/evidence.jsonl", "result": "pass", "claims": [{"claim": "record_hashes", "result": "pass", "detail": null}, {"claim": "chain", "result": "pass", "detail": null}, {"claim": "head_attestation", "result": "pass", "detail": null}, {"claim": "witness", "result": "not_checked", "detail": null}, {"claim": "checkpoint", "result": "not_checked", "detail": null}]}
+{"ledger": "samples/five-receipts/evidence.jsonl", "result": "pass", "claims": [{"claim": "record_hashes", "result": "pass", "detail": null}, {"claim": "chain", "result": "pass", "detail": null}, {"claim": "head_attestation", "result": "pass", "detail": null}, {"claim": "witness", "result": "not_checked", "detail": null}, {"claim": "checkpoint", "result": "not_checked", "detail": null}, {"claim": "capacity", "result": "not_checked", "detail": "ledger carries no cumulative account records"}]}
 ```
 
 ## Library

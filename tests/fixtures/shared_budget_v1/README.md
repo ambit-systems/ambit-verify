@@ -1,0 +1,1 @@
+Ledger from one run of the ambit-authority shared-budget walkthrough: two agents share a budget of 3 calls. Three calls commit (op-a, op-b, op-c) and the fourth is refused. The files hold public keys and signed tokens only. No private key is retained.

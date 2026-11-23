@@ -62,6 +62,7 @@ def test_build_report_missing_claims_are_not_checked() -> None:
         "head_attestation": "not_checked",
         "witness": "not_checked",
         "checkpoint": "not_checked",
+        "capacity": "not_checked",
     }
 
 
@@ -89,6 +90,7 @@ def test_json_report_for_sample_with_head_attestation(capsys: pytest.CaptureFixt
         "head_attestation": "pass",
         "witness": "not_checked",
         "checkpoint": "not_checked",
+        "capacity": "not_checked",
     }
 
 

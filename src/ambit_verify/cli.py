@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
+from .capacity import CapacityResult, cross_check_with_replay, recompute_capacity
 from .cli_report import FAIL, NOT_CHECKED, PASS, ClaimOutcome, build_report
 from .hashing import strict_json_loads
 from .head_attestation import HeadAttestation, HeadVerifier
@@ -134,6 +135,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Ed25519 public key (32 bytes, hex) of the checkpoint countersigner",
     )
     parser.add_argument(
+        "--admission-roots",
+        type=Path,
+        metavar="PATH",
+        help="admission trust roots (JSON, by adapter) for the capacity cross-check",
+    )
+    parser.add_argument(
+        "--quantity-policy",
+        type=Path,
+        metavar="PATH",
+        help="generic quantity policy (JSON) for the capacity cross-check",
+    )
+    parser.add_argument(
         "--report",
         choices=("text", "json"),
         default="text",
@@ -166,6 +179,8 @@ def _check_flags(parser: argparse.ArgumentParser, args: argparse.Namespace) -> N
         parser.error("--witnessed-ledger-id requires --witness")
     if args.countersign_public_key is not None and args.checkpoint is None:
         parser.error("--countersign-public-key requires --checkpoint")
+    if (args.admission_roots is None) != (args.quantity_policy is None):
+        parser.error("--admission-roots and --quantity-policy are used together")
 
 
 def _trust_root_of(block: object) -> str | None:
@@ -292,7 +307,14 @@ def _verify(args: argparse.Namespace, outcomes: dict[str, ClaimOutcome]) -> int:
             if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate > 0:
                 want_seq = candidate
 
-    chain = _walk_ledger(Path(args.ledger).expanduser(), want_seq=want_seq)
+    cross_check = args.admission_roots is not None
+    kept: list[dict[str, Any]] = []
+
+    def keep(record: dict[str, Any]) -> None:
+        if cross_check or record.get("record_type") in ("decision", "consumption"):
+            kept.append(record)
+
+    chain = _walk_ledger(Path(args.ledger).expanduser(), want_seq=want_seq, record_visitor=keep)
     outcomes.update(_chain_outcomes(chain))
     if args.public_key is not None:
         try:
@@ -320,7 +342,73 @@ def _verify(args: argparse.Namespace, outcomes: dict[str, ClaimOutcome]) -> int:
         if checkpoint is None:
             raise _CheckError("checkpoint: checkpoint is unavailable")
         _record(outcomes, "checkpoint", lambda: _checkpoint_check(args, checkpoint, chain))
+    _capacity_claim(args, kept, outcomes)
     return count
+
+
+_TIER_1_DETAIL = (
+    "recomputed from the ledger alone; bound and quantities as stated by the ledger; "
+    "not cross-checked against signed credentials"
+)
+_TIER_2_DETAIL = (
+    "recomputed from the ledger; bound and quantities cross-checked against signed "
+    "credentials by lifecycle replay"
+)
+
+
+def _read_json_object(path: Path) -> Mapping[str, Any]:
+    try:
+        value: Any = strict_json_loads(_read_utf8_document(path))
+    except (UnicodeDecodeError, _InputLimitError, ValueError, RecursionError) as exc:
+        raise _CheckError(f"{path.name} is not a valid JSON document ({exc})") from None
+    if not isinstance(value, Mapping):
+        raise _CheckError(f"{path.name} is not a JSON object")
+    return value
+
+
+def _capacity_claim(
+    args: argparse.Namespace, records: list[dict[str, Any]], outcomes: dict[str, ClaimOutcome]
+) -> None:
+    """Record the capacity claim. A failure is recorded and raised."""
+    result = recompute_capacity(records)
+    if result.result == NOT_CHECKED:
+        outcomes["capacity"] = ClaimOutcome(NOT_CHECKED, result.detail)
+        return
+    if result.result == FAIL:
+        outcomes["capacity"] = ClaimOutcome(FAIL, result.detail)
+        raise _CheckError(f"capacity: {result.detail}")
+    accounts = tuple(account.as_dict() for account in result.accounts)
+    detail = _TIER_1_DETAIL
+    if args.admission_roots is not None:
+        detail = _tier_2_detail(args, records, result, outcomes)
+    outcomes["capacity"] = ClaimOutcome(PASS, detail, accounts)
+
+
+def _tier_2_detail(
+    args: argparse.Namespace,
+    records: list[dict[str, Any]],
+    result: CapacityResult,
+    outcomes: dict[str, ClaimOutcome],
+) -> str:
+    """Run the replay cross-check. Return the detail of the passing claim."""
+    if args.public_key is None:
+        return f"{_TIER_1_DETAIL}; cross-check not run: it needs --public-key"
+    try:
+        roots = _read_json_object(args.admission_roots)
+        policy = _read_json_object(args.quantity_policy)
+    except (_CheckError, OSError) as exc:
+        return f"{_TIER_1_DETAIL}; cross-check not run: {_terminal_safe(exc)}"
+    mismatch = cross_check_with_replay(
+        records,
+        result.accounts,
+        admission_trust_roots_by_adapter=roots,
+        generic_quantity_policy=policy,
+        enforcement_point_public_key=args.public_key.hex(),
+    )
+    if mismatch is not None:
+        outcomes["capacity"] = ClaimOutcome(FAIL, f"cross-check: {mismatch}")
+        raise _CheckError(f"capacity: cross-check: {mismatch}")
+    return _TIER_2_DETAIL
 
 
 def _record(outcomes: dict[str, ClaimOutcome], claim: str, check: Callable[[], None]) -> None:
@@ -347,7 +435,7 @@ def _requested_claims(args: argparse.Namespace) -> set[str]:
 
 def _json_report(args: argparse.Namespace, outcomes: dict[str, ClaimOutcome]) -> str:
     """Render the report. A requested claim that never ran is ``not_checked`` with a reason."""
-    for claim in _requested_claims(args) - outcomes.keys():
+    for claim in (_requested_claims(args) | {"capacity"}) - outcomes.keys():
         outcomes[claim] = ClaimOutcome(NOT_CHECKED, "not run: an earlier claim failed")
     report = build_report(str(args.ledger), outcomes)
     return json.dumps(report, ensure_ascii=True, allow_nan=False)
